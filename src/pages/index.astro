@@ -1,0 +1,176 @@
+---
+import GalaxyVisualizer from '../components/GalaxyVisualizer';
+---
+
+<html lang="es">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Simulación de Colisión Galáctica Precisa</title>
+    <style>
+        /* Reset estricto para eliminar cualquier borde blanco */
+        :root {
+            color-scheme: dark;
+        }
+        *, *::before, *::after {
+            box-sizing: border-box;
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #000;
+            color: white;
+            overflow: hidden; /* Bloquea barras de desplazamiento */
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+
+        .sim-container { 
+            position: relative; 
+            width: 100%; 
+            height: 100%; 
+            background-color: #000; 
+        }
+        
+        .visualizer-container { 
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; 
+        }
+        
+        .ui-overlay { 
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
+            z-index: 10; pointer-events: none; /* Deja pasar clicks al visualizer */
+            padding: 30px; display: flex; flex-direction: column;
+        }
+        
+        header { margin-bottom: 2rem; }
+        header h1 { font-size: 1.5rem; font-weight: 800; letter-spacing: 1px; color: #7dd3fc; margin: 0; }
+        header p { font-size: 0.9rem; color: #a1a1aa; margin-top: 5px; }
+
+        .sci-panel {
+            align-self: flex-start;
+            background: rgba(15, 23, 42, 0.4);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(125, 211, 252, 0.15);
+            border-radius: 12px;
+            padding: 24px;
+            width: 320px;
+            pointer-events: auto; /* Permite interactuar con el panel */
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5);
+        }
+
+        .sci-panel h2 { 
+            font-size: 1rem; color: #7dd3fc; margin-top: 0; margin-bottom: 1.5rem; 
+            text-align: center; border-bottom: 1px solid rgba(125, 211, 252, 0.2); padding-bottom: 12px; 
+        }
+
+        .data-block { margin-bottom: 1.5rem; }
+        .data-block h3 { font-size: 0.8rem; color: #94a3b8; font-weight: 600; text-transform: uppercase; margin-bottom: 0.8rem; }
+        .data-block .math { font-family: 'Courier New', Courier, monospace; font-size: 1rem; color: #fff; text-align: center; margin: 0; }
+        .data-block .note { font-size: 0.75rem; color: #facc15; text-align: center; margin-top: 4px; }
+
+        .data-item { display: flex; justify-content: space-between; font-size: 0.85rem; line-height: 1.6rem; color: #e0e7ff; border-bottom: 1px solid rgba(255,255,255,0.05); padding: 4px 0;}
+        .data-item:last-child { border-bottom: none; }
+        .data-item .value { color: #facc15; font-weight: 700; font-family: 'Courier New', monospace; }
+
+        /* Estilos del Control Deslizante (Slider) */
+        .control-block {
+            margin-top: 2rem;
+            padding-top: 1rem;
+            border-top: 1px dashed rgba(125, 211, 252, 0.3);
+        }
+        .slider-container {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .slider-container label {
+            font-size: 0.85rem;
+            color: #e0e7ff;
+            display: flex;
+            justify-content: space-between;
+        }
+        .slider-container span {
+            color: #facc15;
+            font-weight: bold;
+            font-family: 'Courier New', monospace;
+        }
+        input[type=range] {
+            -webkit-appearance: none;
+            width: 100%;
+            background: transparent;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 16px;
+            width: 16px;
+            border-radius: 50%;
+            background: #facc15;
+            cursor: pointer;
+            margin-top: -6px;
+            box-shadow: 0 0 10px rgba(250, 204, 21, 0.5);
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 4px;
+            cursor: pointer;
+            background: rgba(125, 211, 252, 0.2);
+            border-radius: 2px;
+        }
+    </style>
+</head>
+<body>
+    <main class="sim-container">
+        <div class="ui-overlay">
+            <header>
+                <h1>Colisión Galáctica N-Body</h1>
+                <p>Simulación Física Precisa</p>
+            </header>
+            
+            <aside class="sci-panel">
+                <h2>Monitor de Física</h2>
+                
+                <div class="data-block">
+                    <h3>Ecuación Gravitatoria</h3>
+                    <p class="math">F = G·(m₁·m₂)/(r² + ε²)</p>
+                    <p class="note">Softening (ε = 3.5)</p>
+                </div>
+
+                <div class="data-block">
+                    <h3>Parámetros de Integración</h3>
+                    <div class="data-item">
+                        <span>Algoritmo:</span> <span class="value">Euler / Leapfrog</span>
+                    </div>
+                    <div class="data-item">
+                        <span>Paso (dt):</span> <span class="value">0.016s</span>
+                    </div>
+                </div>
+
+                <div class="data-block">
+                    <h3>Estadísticas del Sistema</h3>
+                    <div class="data-item">
+                        <span>Estrellas calculadas:</span> <span class="value">65,536</span>
+                    </div>
+                    <div class="data-item">
+                        <span>Interacciones/s:</span> <span class="value">>4 Billones (GPU)</span>
+                    </div>
+                </div>
+
+                <div class="data-block control-block">
+                    <h3>Control Interactivo</h3>
+                    <div class="slider-container">
+                        <label for="gravitySlider">Gravedad (G): <span id="gravityValueDisplay">0.15</span></label>
+                        <input type="range" id="gravitySlider" min="0.0" max="0.5" step="0.01" value="0.15" />
+                    </div>
+                </div>
+            </aside>
+        </div>
+
+        <div class="visualizer-container">
+            <GalaxyVisualizer client:only="react" />
+        </div>
+    </main>
+</body>
+</html>
