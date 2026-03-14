@@ -40,15 +40,22 @@ const computationShaderVelocity = `
         vec3 acc = vec3(0.0);
         
         if (isBlackHoleMode > 0.5) {
-            // FIX: El Agujero Negro es indomable. Su gravedad SIEMPRE es 0.15, ignore el slider.
-            float blackHoleGravity = 0.15; 
-            
+            // NUEVO: FÍSICA DEL HORIZONTE DE SUCESOS
             vec3 diff1 = center1 - pos.xyz;
+            float distToSingularity = length(diff1);
+            
+            // Si la estrella cruza el radio del agujero negro (11.5), la absorbemos
+            if (distToSingularity < 11.5) {
+                // Matamos su velocidad por completo. Queda atrapada para siempre.
+                gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+                return; // Cortamos el cálculo gravitatorio aquí
+            }
+
+            float actualGravity = max(gravity, 0.08);
             float distSq1 = dot(diff1, diff1) + softening;
-            acc += blackHoleGravity * mass1 * diff1 * pow(distSq1, -1.5);
+            acc += actualGravity * mass1 * diff1 * pow(distSq1, -1.5);
             acc -= vel.xyz * 0.015; // Fricción orbital
         } else {
-            // TU FÍSICA DE COLISIÓN GALÁCTICA EXACTA (SÍ obedece al slider)
             vec3 diff1 = center1 - pos.xyz;
             float distSq1 = dot(diff1, diff1) + softening;
             acc += gravity * mass1 * diff1 * pow(distSq1, -1.5);
