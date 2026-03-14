@@ -30,7 +30,7 @@ const computationShaderVelocity = `
     uniform float mass2;
     uniform vec3 center1;
     uniform vec3 center2;
-    uniform float isBlackHoleMode; // NUEVO UNIFORM
+    uniform float isBlackHoleMode; 
 
     void main() {
         vec2 uv = gl_FragCoord.xy / resolution.xy;
@@ -40,13 +40,14 @@ const computationShaderVelocity = `
         vec3 acc = vec3(0.0);
         
         if (isBlackHoleMode > 0.5) {
-            // FÍSICA AGUJERO NEGRO (Un centro, con fricción para devorar)
+            // FIX: Un agujero negro SIEMPRE traga. Forzamos una gravedad mínima inquebrantable.
+            float actualGravity = max(gravity, 0.08);
+
             vec3 diff1 = center1 - pos.xyz;
             float distSq1 = dot(diff1, diff1) + softening;
-            acc += gravity * mass1 * diff1 * pow(distSq1, -1.5);
-            acc -= vel.xyz * 0.015; // Fricción orbital
+            acc += actualGravity * mass1 * diff1 * pow(distSq1, -1.5);
+            acc -= vel.xyz * 0.015; 
         } else {
-            // TU FÍSICA DE COLISIÓN GALÁCTICA EXACTA
             vec3 diff1 = center1 - pos.xyz;
             float distSq1 = dot(diff1, diff1) + softening;
             acc += gravity * mass1 * diff1 * pow(distSq1, -1.5);
@@ -67,13 +68,13 @@ const vertexShader = `
     
     varying float vDensity;
     varying float vDoppler;
-    varying float vDistToCenter; // NUEVO PARA EL HORIZONTE DE SUCESOS
+    varying float vDistToCenter; 
 
     void main() {
         vec4 pos = texture2D( texturePosition, uv );
         vec4 vel = texture2D( textureVelocity, uv );
         float distToCenter = length(pos.xyz);
-        vDistToCenter = distToCenter; // Pasamos al fragment shader
+        vDistToCenter = distToCenter; 
         
         vDensity = 1.0 / (1.0 + distToCenter * 0.08);
         vDensity = clamp(vDensity, 0.0, 1.0);
@@ -98,27 +99,23 @@ const fragmentShader = `
     varying float vDistToCenter;
 
     void main() {
-        // MAGIA DEL AGUJERO NEGRO: Desaparecer la luz
         if (isBlackHoleMode > 0.5 && vDistToCenter < 11.5) {
-            discard; // El Event Horizon traga la estrella
+            discard; 
         }
 
         float r = 0.0, g = 0.0, b = 0.0;
         
         if (isBlackHoleMode > 0.5) {
-            // COLORES DISCO DE ACRECIÓN
             if (vDistToCenter < 25.0) { r = 1.0; g = 1.0; b = 1.0; } 
             else if (vDistToCenter < 60.0) { r = 0.4; g = 0.8; b = 1.0; } 
             else if (vDistToCenter < 120.0) { r = 1.0; g = 0.5; b = 0.1; } 
             else { r = 0.5; g = 0.1; b = 0.1; } 
         } else {
-            // TU COLOR DE GALAXIA ORIGINAL
             if (vDensity > 0.6) { r = 1.0; g = 1.0; b = 0.9; } 
             else if (vDensity > 0.3) { r = 0.9; g = 0.8; b = 0.6; } 
             else { r = 0.3; g = 0.6; b = 1.0; }
         }
 
-        // DOPPLER (TU CÓDIGO)
         if (useDoppler > 0.5) {
             float shift = clamp(vDoppler * 0.08, -0.6, 0.6);
             if (shift > 0.0) {
@@ -165,18 +162,36 @@ const GalaxyVisualizer = () => {
         composer.addPass(renderScene);
         composer.addPass(bloomPass);
 
-        // --- OBJETO 3D AGUJERO NEGRO ESTÁTICO ---
+        // --- OBJETO 3D AGUJERO NEGRO ESTÁTICO (CORREGIDO CON ESTELAS DE LUZ) ---
+        const bhGroup = new THREE.Group();
+        
         const bhGeometry = new THREE.SphereGeometry(12, 64, 64);
         const bhMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 });
         const blackHoleMesh = new THREE.Mesh(bhGeometry, bhMaterial);
+        bhGroup.add(blackHoleMesh);
         
-        // Anillo de fotones sutil
+        // Anillo de fotones interno (fino)
         const photonRingGeo = new THREE.TorusGeometry(12.5, 0.2, 16, 100);
-        const photonRingMat = new THREE.MeshBasicMaterial({ color: 0xffaa44, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending });
+        const photonRingMat = new THREE.MeshBasicMaterial({ color: 0xffdd88, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending });
         const photonRing = new THREE.Mesh(photonRingGeo, photonRingMat);
         photonRing.rotation.x = Math.PI / 2;
-        blackHoleMesh.add(photonRing);
-        scene.add(blackHoleMesh);
+        bhGroup.add(photonRing);
+
+        // NUEVO: Estela gigante de luz (Gargantua Accretion Disk glow)
+        const streakGeo1 = new THREE.TorusGeometry(20, 4.5, 32, 100);
+        const streakMat1 = new THREE.MeshBasicMaterial({ color: 0xff6622, transparent: true, opacity: 0.12, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
+        const streak1 = new THREE.Mesh(streakGeo1, streakMat1);
+        streak1.rotation.x = Math.PI / 1.8; // Inclinado para dar profundidad
+        bhGroup.add(streak1);
+
+        const streakGeo2 = new THREE.TorusGeometry(16, 2, 32, 100);
+        const streakMat2 = new THREE.MeshBasicMaterial({ color: 0xffcc88, transparent: true, opacity: 0.25, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
+        const streak2 = new THREE.Mesh(streakGeo2, streakMat2);
+        streak2.rotation.x = Math.PI / 1.8;
+        bhGroup.add(streak2);
+
+        scene.add(bhGroup);
+        bhGroup.visible = false; // Oculto por defecto
 
         let bh1 = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), mass: 1200 };
         let bh2 = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), mass: 1200 };
@@ -190,17 +205,15 @@ const GalaxyVisualizer = () => {
         const generateInitialState = (type1: string, type2: string, mode: string) => {
             
             if (mode === 'blackhole') {
-                blackHoleMesh.visible = true;
-                // Centro supermasivo estático
+                bhGroup.visible = true;
                 bh1.pos.set(0, 0, 0); bh1.vel.set(0, 0, 0); bh1.mass = 6000;
-                bh2.mass = 0; // Desactivar la segunda gravedad
+                bh2.mass = 0; 
 
-                // Generar disco de acreción gigante
                 for (let i = 0; i < posArray.length; i += 4) {
                     let r = Math.random() * 200 + 20; 
                     let theta = Math.random() * Math.PI * 2;
                     let x = Math.cos(theta) * r;
-                    let y = (Math.random() - 0.5) * (r * 0.05); // Muy plano
+                    let y = (Math.random() - 0.5) * (r * 0.05); 
                     let z = Math.sin(theta) * r;
 
                     const vMag = Math.sqrt((0.5 * bh1.mass) / r);
@@ -212,9 +225,8 @@ const GalaxyVisualizer = () => {
                     velArray[i] = vx; velArray[i+1] = vy; velArray[i+2] = vz; velArray[i+3] = 1;
                 }
             } else {
-                blackHoleMesh.visible = false;
+                bhGroup.visible = false;
                 
-                // --- TU CÓDIGO BASE EXACTO PARA GALAXIAS ---
                 bh1.pos.set(-80, 0, -20); bh1.vel.set(2.0, 0, 0.5); bh1.mass = 1200;
                 bh2.pos.set(80, 0, 20);   bh2.vel.set(-2.0, 0, -0.5); bh2.mass = type2 === 'dwarf' ? 300 : 1200;
 
@@ -261,7 +273,6 @@ const GalaxyVisualizer = () => {
             }
         };
 
-        // Arrancamos en Modo Galaxia por defecto
         let currentMode = 'galaxy';
         generateInitialState('spiral', 'spiral', currentMode);
 
@@ -304,7 +315,7 @@ const GalaxyVisualizer = () => {
             transparent: true,
             blending: THREE.AdditiveBlending,
             depthWrite: false,
-            depthTest: true // Para que la esfera negra tape las estrellas de atrás
+            depthTest: true 
         });
 
         const points = new THREE.Points(geometry, material);
@@ -330,6 +341,14 @@ const GalaxyVisualizer = () => {
                 currentG = parseFloat(e.target.value);
                 document.getElementById('gravityValueDisplay')!.innerText = currentG.toFixed(2);
                 velVar.material.uniforms.gravity.value = currentG;
+                
+                // NUEVO: Lógica del Easter Egg divertido
+                const popup = document.getElementById('zeroGravityPopup');
+                if (currentG === 0.0) {
+                    if (popup) popup.classList.add('show-popup');
+                } else {
+                    if (popup) popup.classList.remove('show-popup');
+                }
             }),
             bindControl('timeSlider', 'input', (e) => {
                 currentDt = parseFloat(e.target.value);
@@ -346,7 +365,6 @@ const GalaxyVisualizer = () => {
                 const t1 = (document.getElementById('typeGal1') as HTMLSelectElement).value;
                 const t2 = (document.getElementById('typeGal2') as HTMLSelectElement).value;
                 
-                // Actualizamos los uniforms según el modo
                 velVar.material.uniforms.isBlackHoleMode.value = currentMode === 'blackhole' ? 1.0 : 0.0;
                 material.uniforms.isBlackHoleMode.value = currentMode === 'blackhole' ? 1.0 : 0.0;
                 
@@ -369,8 +387,12 @@ const GalaxyVisualizer = () => {
             controls.update();
             material.uniforms.cameraPos.value.copy(camera.position);
 
+            // Hacer que la estela gigante de luz rote muy sutilmente
+            if (bhGroup.visible && !isPausedRef.current) {
+                bhGroup.rotation.y += 0.001;
+            }
+
             if (!isPausedRef.current) {
-                // TU CÓDIGO EXACTO DE MOVIMIENTO DE NÚCLEOS (Solo corre en modo galaxia)
                 if (currentMode === 'galaxy') {
                     const dist = bh1.pos.clone().sub(bh2.pos);
                     const r2 = dist.lengthSq() + 5.0; 
