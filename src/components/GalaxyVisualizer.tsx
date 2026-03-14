@@ -30,6 +30,7 @@ const computationShaderVelocity = `
     uniform float mass2;
     uniform vec3 center1;
     uniform vec3 center2;
+    uniform float isBlackHoleMode; // NUEVO UNIFORM
 
     void main() {
         vec2 uv = gl_FragCoord.xy / resolution.xy;
@@ -38,13 +39,22 @@ const computationShaderVelocity = `
 
         vec3 acc = vec3(0.0);
         
-        vec3 diff1 = center1 - pos.xyz;
-        float distSq1 = dot(diff1, diff1) + softening;
-        acc += gravity * mass1 * diff1 * pow(distSq1, -1.5);
+        if (isBlackHoleMode > 0.5) {
+            // FÍSICA AGUJERO NEGRO (Un centro, con fricción para devorar)
+            vec3 diff1 = center1 - pos.xyz;
+            float distSq1 = dot(diff1, diff1) + softening;
+            acc += gravity * mass1 * diff1 * pow(distSq1, -1.5);
+            acc -= vel.xyz * 0.015; // Fricción orbital
+        } else {
+            // TU FÍSICA DE COLISIÓN GALÁCTICA EXACTA
+            vec3 diff1 = center1 - pos.xyz;
+            float distSq1 = dot(diff1, diff1) + softening;
+            acc += gravity * mass1 * diff1 * pow(distSq1, -1.5);
 
-        vec3 diff2 = center2 - pos.xyz;
-        float distSq2 = dot(diff2, diff2) + softening;
-        acc += gravity * mass2 * diff2 * pow(distSq2, -1.5);
+            vec3 diff2 = center2 - pos.xyz;
+            float distSq2 = dot(diff2, diff2) + softening;
+            acc += gravity * mass2 * diff2 * pow(distSq2, -1.5);
+        }
 
         gl_FragColor = vec4( vel.xyz + acc * dt, 1.0 );
     }
@@ -57,11 +67,13 @@ const vertexShader = `
     
     varying float vDensity;
     varying float vDoppler;
+    varying float vDistToCenter; // NUEVO PARA EL HORIZONTE DE SUCESOS
 
     void main() {
         vec4 pos = texture2D( texturePosition, uv );
         vec4 vel = texture2D( textureVelocity, uv );
         float distToCenter = length(pos.xyz);
+        vDistToCenter = distToCenter; // Pasamos al fragment shader
         
         vDensity = 1.0 / (1.0 + distToCenter * 0.08);
         vDensity = clamp(vDensity, 0.0, 1.0);
@@ -79,16 +91,34 @@ const vertexShader = `
 
 const fragmentShader = `
     uniform float useDoppler;
+    uniform float isBlackHoleMode;
+    
     varying float vDensity;
     varying float vDoppler;
+    varying float vDistToCenter;
 
     void main() {
+        // MAGIA DEL AGUJERO NEGRO: Desaparecer la luz
+        if (isBlackHoleMode > 0.5 && vDistToCenter < 11.5) {
+            discard; // El Event Horizon traga la estrella
+        }
+
         float r = 0.0, g = 0.0, b = 0.0;
         
-        if (vDensity > 0.6) { r = 1.0; g = 1.0; b = 0.9; } 
-        else if (vDensity > 0.3) { r = 0.9; g = 0.8; b = 0.6; } 
-        else { r = 0.3; g = 0.6; b = 1.0; }
+        if (isBlackHoleMode > 0.5) {
+            // COLORES DISCO DE ACRECIÓN
+            if (vDistToCenter < 25.0) { r = 1.0; g = 1.0; b = 1.0; } 
+            else if (vDistToCenter < 60.0) { r = 0.4; g = 0.8; b = 1.0; } 
+            else if (vDistToCenter < 120.0) { r = 1.0; g = 0.5; b = 0.1; } 
+            else { r = 0.5; g = 0.1; b = 0.1; } 
+        } else {
+            // TU COLOR DE GALAXIA ORIGINAL
+            if (vDensity > 0.6) { r = 1.0; g = 1.0; b = 0.9; } 
+            else if (vDensity > 0.3) { r = 0.9; g = 0.8; b = 0.6; } 
+            else { r = 0.3; g = 0.6; b = 1.0; }
+        }
 
+        // DOPPLER (TU CÓDIGO)
         if (useDoppler > 0.5) {
             float shift = clamp(vDoppler * 0.08, -0.6, 0.6);
             if (shift > 0.0) {
@@ -135,113 +165,105 @@ const GalaxyVisualizer = () => {
         composer.addPass(renderScene);
         composer.addPass(bloomPass);
 
-        // --- OBJETOS VISUALES PARA EL MODO "AGUJEROS NEGROS" ---
-        let bh1 = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), mass: 1500 };
-        let bh2 = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), mass: 1500 };
+        // --- OBJETO 3D AGUJERO NEGRO ESTÁTICO ---
+        const bhGeometry = new THREE.SphereGeometry(12, 64, 64);
+        const bhMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 });
+        const blackHoleMesh = new THREE.Mesh(bhGeometry, bhMaterial);
         
-        const bhGeometry = new THREE.SphereGeometry(2.5, 32, 32);
-        const bhMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 }); // Esfera negra sólida
-        const bhMesh1 = new THREE.Mesh(bhGeometry, bhMaterial);
-        const bhMesh2 = new THREE.Mesh(bhGeometry, bhMaterial);
-        
-        const auraMat = new THREE.MeshBasicMaterial({ color: 0xffddaa, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending });
-        const bhAura1 = new THREE.Mesh(new THREE.SphereGeometry(3.5, 16, 16), auraMat);
-        const bhAura2 = new THREE.Mesh(new THREE.SphereGeometry(3.5, 16, 16), auraMat);
-        bhMesh1.add(bhAura1); bhMesh2.add(bhAura2);
-        
-        scene.add(bhMesh1); scene.add(bhMesh2);
+        // Anillo de fotones sutil
+        const photonRingGeo = new THREE.TorusGeometry(12.5, 0.2, 16, 100);
+        const photonRingMat = new THREE.MeshBasicMaterial({ color: 0xffaa44, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending });
+        const photonRing = new THREE.Mesh(photonRingGeo, photonRingMat);
+        photonRing.rotation.x = Math.PI / 2;
+        blackHoleMesh.add(photonRing);
+        scene.add(blackHoleMesh);
 
-        const MAX_TRAIL = 200;
-        const trailGeom1 = new THREE.BufferGeometry();
-        const trailGeom2 = new THREE.BufferGeometry();
-        trailGeom1.setAttribute('position', new THREE.BufferAttribute(new Float32Array(MAX_TRAIL * 3), 3));
-        trailGeom2.setAttribute('position', new THREE.BufferAttribute(new Float32Array(MAX_TRAIL * 3), 3));
-        const trailLine1 = new THREE.Line(trailGeom1, new THREE.LineBasicMaterial({ color: 0x4488ff, transparent: true, opacity: 0.4 }));
-        const trailLine2 = new THREE.Line(trailGeom2, new THREE.LineBasicMaterial({ color: 0xff4444, transparent: true, opacity: 0.4 }));
-        scene.add(trailLine1); scene.add(trailLine2);
-        let trailIdx = 0;
-
-        // --- GPU COMPUTE ---
+        let bh1 = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), mass: 1200 };
+        let bh2 = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), mass: 1200 };
+        
         const gpuCompute = new GPUComputationRenderer(WIDTH, WIDTH, renderer);
         const dtPosition = gpuCompute.createTexture();
         const dtVelocity = gpuCompute.createTexture();
         const posArray = dtPosition.image.data as Float32Array;
         const velArray = dtVelocity.image.data as Float32Array;
 
-        // LA FUNCIÓN DE GENERACIÓN AHORA DEPENDE DEL MODO ELEGIDO
         const generateInitialState = (type1: string, type2: string, mode: string) => {
             
-            if (mode === 'galaxy') {
-                // MODO 1: CHOQUE GALÁCTICO PURO
-                // Ocultar esferas y líneas
-                bhMesh1.visible = false; bhMesh2.visible = false;
-                trailLine1.visible = false; trailLine2.visible = false;
+            if (mode === 'blackhole') {
+                blackHoleMesh.visible = true;
+                // Centro supermasivo estático
+                bh1.pos.set(0, 0, 0); bh1.vel.set(0, 0, 0); bh1.mass = 6000;
+                bh2.mass = 0; // Desactivar la segunda gravedad
 
-                // Trayectoria de Colisión Frontal/Rasante
+                // Generar disco de acreción gigante
+                for (let i = 0; i < posArray.length; i += 4) {
+                    let r = Math.random() * 200 + 20; 
+                    let theta = Math.random() * Math.PI * 2;
+                    let x = Math.cos(theta) * r;
+                    let y = (Math.random() - 0.5) * (r * 0.05); // Muy plano
+                    let z = Math.sin(theta) * r;
+
+                    const vMag = Math.sqrt((0.5 * bh1.mass) / r);
+                    let vx = Math.sin(theta) * vMag;
+                    let vy = (Math.random() - 0.5) * 0.5;
+                    let vz = -Math.cos(theta) * vMag;
+
+                    posArray[i] = x; posArray[i+1] = y; posArray[i+2] = z; posArray[i+3] = 1;
+                    velArray[i] = vx; velArray[i+1] = vy; velArray[i+2] = vz; velArray[i+3] = 1;
+                }
+            } else {
+                blackHoleMesh.visible = false;
+                
+                // --- TU CÓDIGO BASE EXACTO PARA GALAXIAS ---
                 bh1.pos.set(-80, 0, -20); bh1.vel.set(2.0, 0, 0.5); bh1.mass = 1200;
                 bh2.pos.set(80, 0, 20);   bh2.vel.set(-2.0, 0, -0.5); bh2.mass = type2 === 'dwarf' ? 300 : 1200;
 
-            } else {
-                // MODO 2: AGUJEROS NEGROS BINARIOS
-                // Mostrar esferas y líneas
-                bhMesh1.visible = true; bhMesh2.visible = true;
-                trailLine1.visible = true; trailLine2.visible = true;
+                const fillGalaxy = (offset: number, centerObj: any, type: string) => {
+                    const count = posArray.length / 2;
+                    for (let i = offset; i < offset + count; i += 4) {
+                        let r = Math.random() * (type === 'dwarf' ? 20 : 50) + 2;
+                        let theta = Math.random() * Math.PI * 2;
+                        let x, y, z, vx, vy, vz;
 
-                // Trayectoria Orbital Estable
-                bh1.pos.set(-50, 0, 0); bh1.vel.set(0, 0, -3.2); bh1.mass = 1500;
-                bh2.pos.set(50, 0, 0);  bh2.vel.set(0, 0, 3.2);  bh2.mass = 1500;
-            }
-            
-            trailGeom1.attributes.position.array.fill(0);
-            trailGeom2.attributes.position.array.fill(0);
-            trailGeom1.attributes.position.needsUpdate = true;
-            trailGeom2.attributes.position.needsUpdate = true;
-            trailIdx = 0;
+                        if (type === 'elliptical') {
+                            let phi = Math.acos((Math.random() * 2) - 1);
+                            x = r * Math.sin(phi) * Math.cos(theta);
+                            y = r * Math.sin(phi) * Math.sin(theta);
+                            z = r * Math.cos(phi);
+                            const vMag = Math.sqrt((0.5 * centerObj.mass) / r);
+                            vx = (Math.random() - 0.5) * vMag;
+                            vy = (Math.random() - 0.5) * vMag;
+                            vz = (Math.random() - 0.5) * vMag;
+                        } else {
+                            x = Math.cos(theta) * r;
+                            y = (Math.random() - 0.5) * 4; 
+                            z = Math.sin(theta) * r;
+                            const vMag = Math.sqrt((0.5 * centerObj.mass) / r);
+                            vx = Math.sin(theta) * vMag;
+                            vy = (Math.random() - 0.5) * 1.5;
+                            vz = -Math.cos(theta) * vMag;
+                        }
 
-            const fillGalaxy = (offset: number, centerObj: any, type: string) => {
-                const count = posArray.length / 2;
-                for (let i = offset; i < offset + count; i += 4) {
-                    let r = Math.random() * (type === 'dwarf' ? 20 : 50) + 2;
-                    let theta = Math.random() * Math.PI * 2;
-                    let x, y, z, vx, vy, vz;
+                        posArray[i] = x + centerObj.pos.x;
+                        posArray[i+1] = y + centerObj.pos.y;
+                        posArray[i+2] = z + centerObj.pos.z;
+                        posArray[i+3] = 1;
 
-                    if (type === 'elliptical') {
-                        let phi = Math.acos((Math.random() * 2) - 1);
-                        x = r * Math.sin(phi) * Math.cos(theta);
-                        y = r * Math.sin(phi) * Math.sin(theta);
-                        z = r * Math.cos(phi);
-                        const vMag = Math.sqrt((0.5 * centerObj.mass) / r);
-                        vx = (Math.random() - 0.5) * vMag;
-                        vy = (Math.random() - 0.5) * vMag;
-                        vz = (Math.random() - 0.5) * vMag;
-                    } else {
-                        x = Math.cos(theta) * r;
-                        y = (Math.random() - 0.5) * 4; 
-                        z = Math.sin(theta) * r;
-                        const vMag = Math.sqrt((0.5 * centerObj.mass) / r);
-                        vx = Math.sin(theta) * vMag;
-                        vy = (Math.random() - 0.5) * 1.5;
-                        vz = -Math.cos(theta) * vMag;
+                        velArray[i] = vx + centerObj.vel.x;
+                        velArray[i+1] = vy + centerObj.vel.y;
+                        velArray[i+2] = vz + centerObj.vel.z;
+                        velArray[i+3] = 1;
                     }
+                };
 
-                    posArray[i] = x + centerObj.pos.x;
-                    posArray[i+1] = y + centerObj.pos.y;
-                    posArray[i+2] = z + centerObj.pos.z;
-                    posArray[i+3] = 1;
-
-                    velArray[i] = vx + centerObj.vel.x;
-                    velArray[i+1] = vy + centerObj.vel.y;
-                    velArray[i+2] = vz + centerObj.vel.z;
-                    velArray[i+3] = 1;
-                }
-            };
-
-            fillGalaxy(0, bh1, type1);
-            fillGalaxy(posArray.length / 2, bh2, type2);
+                fillGalaxy(0, bh1, type1);
+                fillGalaxy(posArray.length / 2, bh2, type2);
+            }
         };
 
         // Arrancamos en Modo Galaxia por defecto
-        generateInitialState('spiral', 'spiral', 'galaxy');
+        let currentMode = 'galaxy';
+        generateInitialState('spiral', 'spiral', currentMode);
 
         const posVar = gpuCompute.addVariable("texturePosition", computationShaderPosition, dtPosition);
         const velVar = gpuCompute.addVariable("textureVelocity", computationShaderVelocity, dtVelocity);
@@ -256,10 +278,10 @@ const GalaxyVisualizer = () => {
         velVar.material.uniforms.mass2 = { value: bh2.mass };
         velVar.material.uniforms.center1 = { value: bh1.pos };
         velVar.material.uniforms.center2 = { value: bh2.pos };
+        velVar.material.uniforms.isBlackHoleMode = { value: 0.0 };
         
         gpuCompute.init();
 
-        // --- MATERIAL ESTELAR ---
         const geometry = new THREE.BufferGeometry();
         const uvs = new Float32Array(WIDTH * WIDTH * 2);
         for (let i = 0; i < WIDTH * WIDTH; i++) {
@@ -274,19 +296,20 @@ const GalaxyVisualizer = () => {
                 texturePosition: { value: null },
                 textureVelocity: { value: null },
                 cameraPos: { value: camera.position },
-                useDoppler: { value: 1.0 }
+                useDoppler: { value: 1.0 },
+                isBlackHoleMode: { value: 0.0 }
             },
             vertexShader,
             fragmentShader,
             transparent: true,
             blending: THREE.AdditiveBlending,
-            depthWrite: false
+            depthWrite: false,
+            depthTest: true // Para que la esfera negra tape las estrellas de atrás
         });
 
         const points = new THREE.Points(geometry, material);
         scene.add(points);
 
-        // --- CONEXIÓN DE UI ---
         const bindControl = (id: string, event: string, handler: (e: any) => void) => {
             const el = document.getElementById(id);
             if (el) el.addEventListener(event, handler);
@@ -317,17 +340,23 @@ const GalaxyVisualizer = () => {
             bindControl('dopplerToggle', 'change', (e) => {
                 material.uniforms.useDoppler.value = e.target.checked ? 1.0 : 0.0;
             }),
-            // Función maestra de reinicio / cambio de modo
             bindControl('simMode', 'change', () => document.getElementById('resetButton')?.click()),
             bindControl('resetButton', 'click', () => {
-                const mode = (document.getElementById('simMode') as HTMLSelectElement).value;
+                currentMode = (document.getElementById('simMode') as HTMLSelectElement).value;
                 const t1 = (document.getElementById('typeGal1') as HTMLSelectElement).value;
                 const t2 = (document.getElementById('typeGal2') as HTMLSelectElement).value;
                 
-                generateInitialState(t1, t2, mode);
+                // Actualizamos los uniforms según el modo
+                velVar.material.uniforms.isBlackHoleMode.value = currentMode === 'blackhole' ? 1.0 : 0.0;
+                material.uniforms.isBlackHoleMode.value = currentMode === 'blackhole' ? 1.0 : 0.0;
+                
+                generateInitialState(t1, t2, currentMode);
                 
                 velVar.material.uniforms.mass1.value = bh1.mass;
                 velVar.material.uniforms.mass2.value = bh2.mass;
+                velVar.material.uniforms.center1.value.copy(bh1.pos);
+                velVar.material.uniforms.center2.value.copy(bh2.pos);
+
                 gpuCompute.renderTexture(dtPosition, posVar.renderTargets[0]);
                 gpuCompute.renderTexture(dtPosition, posVar.renderTargets[1]);
                 gpuCompute.renderTexture(dtVelocity, velVar.renderTargets[0]);
@@ -335,43 +364,28 @@ const GalaxyVisualizer = () => {
             })
         ];
 
-        // --- BUCLE DE ANIMACIÓN ---
         const animate = () => {
             requestAnimationFrame(animate);
             controls.update();
             material.uniforms.cameraPos.value.copy(camera.position);
 
             if (!isPausedRef.current) {
-                // FÍSICA DE NÚCLEOS
-                const dist = bh1.pos.clone().sub(bh2.pos);
-                const r2 = dist.lengthSq() + 5.0; 
-                const force = (currentG * bh1.mass * bh2.mass) / r2;
-                
-                const acc1 = dist.clone().normalize().multiplyScalar(-force / bh1.mass);
-                const acc2 = dist.clone().normalize().multiplyScalar(force / bh2.mass);
-                
-                bh1.vel.add(acc1.multiplyScalar(currentDt));
-                bh2.vel.add(acc2.multiplyScalar(currentDt));
-                bh1.pos.add(bh1.vel.clone().multiplyScalar(currentDt));
-                bh2.pos.add(bh2.vel.clone().multiplyScalar(currentDt));
+                // TU CÓDIGO EXACTO DE MOVIMIENTO DE NÚCLEOS (Solo corre en modo galaxia)
+                if (currentMode === 'galaxy') {
+                    const dist = bh1.pos.clone().sub(bh2.pos);
+                    const r2 = dist.lengthSq() + 5.0; 
+                    const force = (currentG * bh1.mass * bh2.mass) / r2;
+                    
+                    const acc1 = dist.clone().normalize().multiplyScalar(-force / bh1.mass);
+                    const acc2 = dist.clone().normalize().multiplyScalar(force / bh2.mass);
+                    
+                    bh1.vel.add(acc1.multiplyScalar(currentDt));
+                    bh2.vel.add(acc2.multiplyScalar(currentDt));
+                    bh1.pos.add(bh1.vel.clone().multiplyScalar(currentDt));
+                    bh2.pos.add(bh2.vel.clone().multiplyScalar(currentDt));
 
-                velVar.material.uniforms.center1.value.copy(bh1.pos);
-                velVar.material.uniforms.center2.value.copy(bh2.pos);
-
-                // Solo actualizar visuales si estamos en modo agujeros negros
-                if (bhMesh1.visible) {
-                    bhMesh1.position.copy(bh1.pos);
-                    bhMesh2.position.copy(bh2.pos);
-
-                    if (trailIdx < MAX_TRAIL) {
-                        const arr1 = trailGeom1.attributes.position.array as Float32Array;
-                        const arr2 = trailGeom2.attributes.position.array as Float32Array;
-                        arr1[trailIdx*3] = bh1.pos.x; arr1[trailIdx*3+1] = bh1.pos.y; arr1[trailIdx*3+2] = bh1.pos.z;
-                        arr2[trailIdx*3] = bh2.pos.x; arr2[trailIdx*3+1] = bh2.pos.y; arr2[trailIdx*3+2] = bh2.pos.z;
-                        trailGeom1.attributes.position.needsUpdate = true;
-                        trailGeom2.attributes.position.needsUpdate = true;
-                        if (Math.random() > 0.3) trailIdx++;
-                    }
+                    velVar.material.uniforms.center1.value.copy(bh1.pos);
+                    velVar.material.uniforms.center2.value.copy(bh2.pos);
                 }
 
                 gpuCompute.compute();
