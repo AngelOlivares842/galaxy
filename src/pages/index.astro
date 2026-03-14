@@ -8,7 +8,6 @@ import GalaxyVisualizer from '../components/GalaxyVisualizer';
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Simulación de Colisión Galáctica Precisa</title>
     <style>
-        /* Reset estricto para eliminar cualquier borde blanco */
         :root {
             color-scheme: dark;
         }
@@ -17,31 +16,17 @@ import GalaxyVisualizer from '../components/GalaxyVisualizer';
         }
 
         body, html {
-            margin: 0;
-            padding: 0;
-            width: 100%;
-            height: 100%;
-            background-color: #000;
-            color: white;
-            overflow: hidden; /* Bloquea barras de desplazamiento */
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            background-color: #000; color: white; overflow: hidden; 
             font-family: system-ui, -apple-system, sans-serif;
         }
 
-        .sim-container { 
-            position: relative; 
-            width: 100%; 
-            height: 100%; 
-            background-color: #000; 
-        }
-        
-        .visualizer-container { 
-            position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; 
-        }
+        .sim-container { position: relative; width: 100%; height: 100%; background-color: #000; }
+        .visualizer-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; }
         
         .ui-overlay { 
             position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
-            z-index: 10; pointer-events: none; /* Deja pasar clicks al visualizer */
-            padding: 30px; display: flex; flex-direction: column;
+            z-index: 10; pointer-events: none; padding: 30px; display: flex; flex-direction: column;
         }
         
         header { margin-bottom: 2rem; }
@@ -49,22 +34,18 @@ import GalaxyVisualizer from '../components/GalaxyVisualizer';
         header p { font-size: 0.9rem; color: #a1a1aa; margin-top: 5px; }
 
         .sci-panel {
-            align-self: flex-start;
-            background: rgba(15, 23, 42, 0.4);
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
-            border: 1px solid rgba(125, 211, 252, 0.15);
-            border-radius: 12px;
-            padding: 24px;
-            width: 320px;
-            pointer-events: auto; /* Permite interactuar con el panel */
+            align-self: flex-start; background: rgba(15, 23, 42, 0.4);
+            backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(125, 211, 252, 0.15); border-radius: 12px;
+            padding: 24px; width: 320px; pointer-events: auto; 
             box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5);
+            max-height: calc(100vh - 120px); overflow-y: auto;
         }
 
-        .sci-panel h2 { 
-            font-size: 1rem; color: #7dd3fc; margin-top: 0; margin-bottom: 1.5rem; 
-            text-align: center; border-bottom: 1px solid rgba(125, 211, 252, 0.2); padding-bottom: 12px; 
-        }
+        .sci-panel::-webkit-scrollbar { width: 6px; }
+        .sci-panel::-webkit-scrollbar-thumb { background: rgba(125, 211, 252, 0.3); border-radius: 3px; }
+
+        .sci-panel h2 { font-size: 1rem; color: #7dd3fc; margin-top: 0; margin-bottom: 1.5rem; text-align: center; border-bottom: 1px solid rgba(125, 211, 252, 0.2); padding-bottom: 12px; }
 
         .data-block { margin-bottom: 1.5rem; }
         .data-block h3 { font-size: 0.8rem; color: #94a3b8; font-weight: 600; text-transform: uppercase; margin-bottom: 0.8rem; }
@@ -75,50 +56,40 @@ import GalaxyVisualizer from '../components/GalaxyVisualizer';
         .data-item:last-child { border-bottom: none; }
         .data-item .value { color: #facc15; font-weight: 700; font-family: 'Courier New', monospace; }
 
-        /* Estilos del Control Deslizante (Slider) */
-        .control-block {
-            margin-top: 2rem;
-            padding-top: 1rem;
-            border-top: 1px dashed rgba(125, 211, 252, 0.3);
-        }
-        .slider-container {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-        .slider-container label {
-            font-size: 0.85rem;
-            color: #e0e7ff;
-            display: flex;
-            justify-content: space-between;
-        }
-        .slider-container span {
-            color: #facc15;
-            font-weight: bold;
-            font-family: 'Courier New', monospace;
-        }
+        .control-block { margin-top: 2rem; padding-top: 1rem; border-top: 1px dashed rgba(125, 211, 252, 0.3); }
+        .slider-container { display: flex; flex-direction: column; gap: 8px; margin-bottom: 15px; }
+        .slider-container label { font-size: 0.85rem; color: #e0e7ff; display: flex; justify-content: space-between; }
+        .slider-container span { color: #facc15; font-weight: bold; font-family: 'Courier New', monospace; }
+        
+        /* SOLUCIÓN AL BUG VISUAL DE LA BARRA */
         input[type=range] {
-            -webkit-appearance: none;
-            width: 100%;
-            background: transparent;
+            -webkit-appearance: none; appearance: none;
+            width: 100%; height: 6px;
+            background: rgba(125, 211, 252, 0.2);
+            border-radius: 4px; outline: none;
         }
         input[type=range]::-webkit-slider-thumb {
-            -webkit-appearance: none;
-            height: 16px;
-            width: 16px;
-            border-radius: 50%;
-            background: #facc15;
-            cursor: pointer;
-            margin-top: -6px;
-            box-shadow: 0 0 10px rgba(250, 204, 21, 0.5);
+            -webkit-appearance: none; appearance: none;
+            height: 16px; width: 16px; border-radius: 50%;
+            background: #facc15; cursor: pointer;
         }
-        input[type=range]::-webkit-slider-runnable-track {
-            width: 100%;
-            height: 4px;
-            cursor: pointer;
-            background: rgba(125, 211, 252, 0.2);
-            border-radius: 2px;
+        input[type=range]::-moz-range-thumb {
+            height: 16px; width: 16px; border-radius: 50%;
+            background: #facc15; cursor: pointer; border: none;
         }
+
+        /* Estilo Checkbox */
+        .toggle-container { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; font-size: 0.85rem; color: #e0e7ff;}
+        input[type=checkbox] { accent-color: #facc15; width: 18px; height: 18px; cursor: pointer; }
+
+        .btn-reset {
+            width: 100%; padding: 10px; margin-top: 5px;
+            background: rgba(239, 68, 68, 0.2); border: 1px solid rgba(239, 68, 68, 0.5);
+            color: #fca5a5; font-weight: bold; border-radius: 6px; cursor: pointer;
+            transition: all 0.2s; text-transform: uppercase; font-size: 0.8rem; letter-spacing: 1px;
+        }
+        .btn-reset:hover { background: rgba(239, 68, 68, 0.4); box-shadow: 0 0 15px rgba(239, 68, 68, 0.4); color: white; }
+        .btn-reset:active { transform: scale(0.98); }
     </style>
 </head>
 <body>
@@ -139,31 +110,35 @@ import GalaxyVisualizer from '../components/GalaxyVisualizer';
                 </div>
 
                 <div class="data-block">
-                    <h3>Parámetros de Integración</h3>
-                    <div class="data-item">
-                        <span>Algoritmo:</span> <span class="value">Euler / Leapfrog</span>
-                    </div>
-                    <div class="data-item">
-                        <span>Paso (dt):</span> <span class="value">0.016s</span>
-                    </div>
-                </div>
-
-                <div class="data-block">
-                    <h3>Estadísticas del Sistema</h3>
-                    <div class="data-item">
-                        <span>Estrellas calculadas:</span> <span class="value">65,536</span>
-                    </div>
-                    <div class="data-item">
-                        <span>Interacciones/s:</span> <span class="value">>4 Billones (GPU)</span>
-                    </div>
+                    <h3>Parámetros</h3>
+                    <div class="data-item"><span>Estrellas:</span> <span class="value">65,536</span></div>
+                    <div class="data-item"><span>Algoritmo:</span> <span class="value">Leapfrog</span></div>
                 </div>
 
                 <div class="data-block control-block">
                     <h3>Control Interactivo</h3>
+                    
+                    <div class="toggle-container">
+                        <label for="darkMatterToggle">Materia Oscura (Halo)</label>
+                        <input type="checkbox" id="darkMatterToggle" checked />
+                    </div>
+
                     <div class="slider-container">
                         <label for="gravitySlider">Gravedad (G): <span id="gravityValueDisplay">0.15</span></label>
                         <input type="range" id="gravitySlider" min="0.0" max="0.5" step="0.01" value="0.15" />
                     </div>
+
+                    <div class="slider-container">
+                        <label for="timeSlider">Vel. Tiempo (dt): <span id="timeValueDisplay">0.016</span></label>
+                        <input type="range" id="timeSlider" min="0.001" max="0.050" step="0.001" value="0.016" />
+                    </div>
+
+                    <div class="slider-container">
+                        <label for="angleSlider">Inclinación Galaxia 2: <span id="angleValueDisplay">0°</span></label>
+                        <input type="range" id="angleSlider" min="0" max="90" step="1" value="0" />
+                    </div>
+
+                    <button id="resetButton" class="btn-reset">Reiniciar Universo</button>
                 </div>
             </aside>
         </div>
