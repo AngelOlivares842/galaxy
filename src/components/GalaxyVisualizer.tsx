@@ -40,14 +40,15 @@ const computationShaderVelocity = `
         vec3 acc = vec3(0.0);
         
         if (isBlackHoleMode > 0.5) {
-            // FIX: Un agujero negro SIEMPRE traga. Forzamos una gravedad mínima inquebrantable.
-            float actualGravity = max(gravity, 0.08);
-
+            // FIX: El Agujero Negro es indomable. Su gravedad SIEMPRE es 0.15, ignore el slider.
+            float blackHoleGravity = 0.15; 
+            
             vec3 diff1 = center1 - pos.xyz;
             float distSq1 = dot(diff1, diff1) + softening;
-            acc += actualGravity * mass1 * diff1 * pow(distSq1, -1.5);
-            acc -= vel.xyz * 0.015; 
+            acc += blackHoleGravity * mass1 * diff1 * pow(distSq1, -1.5);
+            acc -= vel.xyz * 0.015; // Fricción orbital
         } else {
+            // TU FÍSICA DE COLISIÓN GALÁCTICA EXACTA (SÍ obedece al slider)
             vec3 diff1 = center1 - pos.xyz;
             float distSq1 = dot(diff1, diff1) + softening;
             acc += gravity * mass1 * diff1 * pow(distSq1, -1.5);
@@ -162,36 +163,61 @@ const GalaxyVisualizer = () => {
         composer.addPass(renderScene);
         composer.addPass(bloomPass);
 
-        // --- OBJETO 3D AGUJERO NEGRO ESTÁTICO (CORREGIDO CON ESTELAS DE LUZ) ---
+        // --- OBJETO 3D AGUJERO NEGRO ESTÁTICO (AHORA CON DISCO GARGANTUA) ---
         const bhGroup = new THREE.Group();
         
+        // Esfera negra pura (Horizonte de Sucesos)
         const bhGeometry = new THREE.SphereGeometry(12, 64, 64);
         const bhMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 });
         const blackHoleMesh = new THREE.Mesh(bhGeometry, bhMaterial);
         bhGroup.add(blackHoleMesh);
         
-        // Anillo de fotones interno (fino)
-        const photonRingGeo = new THREE.TorusGeometry(12.5, 0.2, 16, 100);
-        const photonRingMat = new THREE.MeshBasicMaterial({ color: 0xffdd88, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending });
-        const photonRing = new THREE.Mesh(photonRingGeo, photonRingMat);
-        photonRing.rotation.x = Math.PI / 2;
-        bhGroup.add(photonRing);
+        // NUEVO: Disco de Acreción Fotorealista con Shader Personalizado
+        const diskGeo = new THREE.RingGeometry(12.2, 50, 64, 32);
+        const diskMat = new THREE.ShaderMaterial({
+            uniforms: {
+                color1: { value: new THREE.Color(0xffeecc) }, // Blanco caliente
+                color2: { value: new THREE.Color(0xff4400) }  // Rojo fuego
+            },
+            vertexShader: `
+                varying vec3 vPos;
+                void main() {
+                    vPos = position;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+            `,
+            fragmentShader: `
+                uniform vec3 color1;
+                uniform vec3 color2;
+                varying vec3 vPos;
+                void main() {
+                    float dist = length(vPos);
+                    
+                    // Degradado de opacidad interior y exterior
+                    float alpha = smoothstep(50.0, 25.0, dist) * smoothstep(12.2, 14.0, dist);
+                    
+                    // Crear estriaciones (anillos de gas) usando ondas
+                    float rings = (sin(dist * 0.8) * 0.5 + 0.5) * (sin(dist * 2.0) * 0.5 + 0.5);
+                    alpha *= (0.3 + 0.7 * rings);
 
-        // NUEVO: Estela gigante de luz (Gargantua Accretion Disk glow)
-        const streakGeo1 = new THREE.TorusGeometry(20, 4.5, 32, 100);
-        const streakMat1 = new THREE.MeshBasicMaterial({ color: 0xff6622, transparent: true, opacity: 0.12, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
-        const streak1 = new THREE.Mesh(streakGeo1, streakMat1);
-        streak1.rotation.x = Math.PI / 1.8; // Inclinado para dar profundidad
-        bhGroup.add(streak1);
+                    // Temperatura: más caliente cerca del agujero negro
+                    float temp = smoothstep(35.0, 12.2, dist);
+                    vec3 color = mix(color2, color1, temp);
 
-        const streakGeo2 = new THREE.TorusGeometry(16, 2, 32, 100);
-        const streakMat2 = new THREE.MeshBasicMaterial({ color: 0xffcc88, transparent: true, opacity: 0.25, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
-        const streak2 = new THREE.Mesh(streakGeo2, streakMat2);
-        streak2.rotation.x = Math.PI / 1.8;
-        bhGroup.add(streak2);
+                    gl_FragColor = vec4(color, alpha * 0.9);
+                }
+            `,
+            transparent: true,
+            blending: THREE.AdditiveBlending,
+            side: THREE.DoubleSide,
+            depthWrite: false
+        });
+        const accretionDisk = new THREE.Mesh(diskGeo, diskMat);
+        accretionDisk.rotation.x = Math.PI / 1.8;
+        bhGroup.add(accretionDisk);
 
         scene.add(bhGroup);
-        bhGroup.visible = false; // Oculto por defecto
+        bhGroup.visible = false; 
 
         let bh1 = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), mass: 1200 };
         let bh2 = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), mass: 1200 };
@@ -342,7 +368,7 @@ const GalaxyVisualizer = () => {
                 document.getElementById('gravityValueDisplay')!.innerText = currentG.toFixed(2);
                 velVar.material.uniforms.gravity.value = currentG;
                 
-                // NUEVO: Lógica del Easter Egg divertido
+                // Animación del popup divertido
                 const popup = document.getElementById('zeroGravityPopup');
                 if (currentG === 0.0) {
                     if (popup) popup.classList.add('show-popup');
@@ -387,9 +413,8 @@ const GalaxyVisualizer = () => {
             controls.update();
             material.uniforms.cameraPos.value.copy(camera.position);
 
-            // Hacer que la estela gigante de luz rote muy sutilmente
             if (bhGroup.visible && !isPausedRef.current) {
-                bhGroup.rotation.y += 0.001;
+                bhGroup.rotation.y += 0.001; // Rotación súper sutil del disco
             }
 
             if (!isPausedRef.current) {
