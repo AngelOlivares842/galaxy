@@ -20,7 +20,12 @@ const computationShaderPosition = `
         vec2 uv = gl_FragCoord.xy / resolution.xy;
         vec4 pos = texture2D( texturePosition, uv );
         vec4 vel = texture2D( textureVelocity, uv );
-        gl_FragColor = vec4( pos.xyz + vel.xyz * dt, 1.0 );
+        
+        if (length(vel.xyz) == 0.0) {
+            gl_FragColor = pos;
+        } else {
+            gl_FragColor = vec4( pos.xyz + vel.xyz * dt, 1.0 );
+        }
     }
 `;
 
@@ -41,25 +46,20 @@ const computationShaderVelocity = `
         vec3 acc = vec3(0.0);
         
         if (isBlackHoleMode > 0.5) {
-            float actualGravity = max(gravity, 0.08); // Gravedad mínima inquebrantable
+            float actualGravity = max(gravity, 0.08); 
             vec3 diff1 = center1 - pos.xyz;
             float distToSingularity = length(diff1);
             
-            // Si la estrella cruza el Horizonte de Sucesos (11.5), la absorbemos físicamente
             if (distToSingularity < 11.5) {
-                // Matamos su velocidad física. Queda atrapada para siempre.
-                gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
-                return; // Cortamos el cálculo gravitatorio aquí
+                gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
+                return; 
             }
 
-            // FIX para evitar singularidades y rebotes violentos: softening mucho más grande
             float effectiveSoftening = 15.0; 
             float distSq1 = dot(diff1, diff1) + effectiveSoftening;
             acc += actualGravity * mass1 * diff1 * pow(distSq1, -1.5);
-            // Mayor fricción orbital para una caída más limpia en espiral
             acc -= vel.xyz * 0.025; 
         } else {
-            // FÍSICA DE COLISIÓN GALÁCTICA NORMAL EXACTA
             vec3 diff1 = center1 - pos.xyz;
             float distSq1 = dot(diff1, diff1) + softening;
             acc += gravity * mass1 * diff1 * pow(distSq1, -1.5);
@@ -76,46 +76,85 @@ const computationShaderVelocity = `
 const vertexShader = `
     uniform sampler2D texturePosition;
     uniform sampler2D textureVelocity;
+    uniform vec3 cameraPos;
+    uniform float isBlackHoleMode;
+    uniform vec3 center1; // Añadido para el brillo correcto de la galaxia
+    uniform vec3 center2; // Añadido para el brillo correcto de la galaxia
+    
     varying float vDensity;
     varying float vDoppler;
     varying float vDistToCenter; 
+    varying vec3 vWorldPos; 
 
     void main() {
         vec4 pos = texture2D( texturePosition, uv );
         vec4 vel = texture2D( textureVelocity, uv );
-        float distToCenter = length(pos.xyz);
+        vWorldPos = pos.xyz;
+        
+        // FIX GALAXIAS: Calculamos la distancia dinámicamente según el modo
+        float distToCenter;
+        if (isBlackHoleMode > 0.5) {
+            distToCenter = length(pos.xyz); // Agujero negro está fijo en 0,0,0
+        } else {
+            // Las galaxias se mueven. Medimos la distancia a su propio núcleo
+            float d1 = length(pos.xyz - center1);
+            float d2 = length(pos.xyz - center2);
+            distToCenter = min(d1, d2);
+        }
+        
         vDistToCenter = distToCenter; 
         
+        // Esto devolverá el brillo amarillo/blanco a los núcleos de las galaxias
         vDensity = 1.0 / (1.0 + distToCenter * 0.08);
         vDensity = clamp(vDensity, 0.0, 1.0);
         
-        vec3 dirToCamera = normalize(cameraPosition - pos.xyz);
+        vec3 dirToCamera = normalize(cameraPos - pos.xyz);
         float approachSpeed = dot(vel.xyz, dirToCamera);
         vDoppler = approachSpeed;
 
         vec4 mvPosition = modelViewMatrix * vec4( pos.xyz, 1.0 );
         gl_Position = projectionMatrix * mvPosition;
-        gl_PointSize = ( 18.0 / -mvPosition.z ) * (6.0 / pow(distToCenter + 1.0, 0.2));
+        
+        if (isBlackHoleMode > 0.5 && distToCenter < 12.0) {
+            gl_PointSize = 0.0;
+        } else {
+            gl_PointSize = ( 18.0 / -mvPosition.z ) * (6.0 / pow(distToCenter + 1.0, 0.2));
+        }
     }
 `;
 
 const fragmentShader = `
     uniform float useDoppler;
     uniform float isBlackHoleMode;
+    uniform vec3 cameraPos;
+    
     varying float vDensity;
     varying float vDoppler;
     varying float vDistToCenter;
+    varying vec3 vWorldPos;
 
     void main() {
-        // FIX: Las estrellas que caen desaparecen visual y bruscamente al entrar
-        if (isBlackHoleMode > 0.5 && vDistToCenter < 11.5) {
-            discard; // El Horizonte de Sucesos traga la estrella y la oculta
+        if (isBlackHoleMode > 0.5) {
+            vec3 dirToStar = normalize(vWorldPos - cameraPos);
+            vec3 dirToCenter = -cameraPos; 
+            float tca = dot(dirToCenter, dirToStar);
+            if (tca > 0.0) {
+                float d2 = dot(dirToCenter, dirToCenter) - tca * tca;
+                float radius = 12.0; 
+                if (d2 < radius * radius) {
+                    float thc = sqrt(radius * radius - d2);
+                    float t0 = tca - thc; 
+                    float distToStar = length(vWorldPos - cameraPos);
+                    if (distToStar > t0) {
+                        discard; 
+                    }
+                }
+            }
         }
 
         float r = 0.0, g = 0.0, b = 0.0;
         
         if (isBlackHoleMode > 0.5) {
-            // COLORES DISCO DE ACRECIÓN Y ESTRELLAS CAYENDO
             if (vDistToCenter < 25.0) { r = 1.0; g = 1.0; b = 1.0; } 
             else if (vDistToCenter < 60.0) { r = 0.4; g = 0.8; b = 1.0; } 
             else if (vDistToCenter < 120.0) { r = 1.0; g = 0.5; b = 0.1; } 
@@ -163,57 +202,48 @@ const gargantuaFragmentShader = `
         vec3 pos = cameraPosition;
         vec3 dir = normalize(vWorldPosition - cameraPosition);
         
-        float rs = 12.0; // Radio de Schwarzschild (Horizonte de sucesos)
-        float h = 0.8;   // Tamaño del paso del rayo de luz
+        float rs = 12.0; 
         
         vec3 color = vec3(0.0);
         float alpha = 0.0;
         
-        // Simulamos la trayectoria del fotón a través del espacio curvo
-        for(int i = 0; i < 200; i++) {
+        for(int i = 0; i < 400; i++) {
             float r2 = dot(pos, pos);
             
-            // Si el fotón cruza el Horizonte de Sucesos, se oscurece
             if(r2 < rs * rs) {
                 alpha = 1.0; 
                 break;
             }
             
-            // FIX: Aumentamos masivamente la distancia de escape del fotón
-            // para que no desaparezca al alejar mucho la cámara (de 100k a 9M).
-            if(r2 > 9000000.0) break; 
+            if(r2 > 100000000.0) break; 
 
             float r = sqrt(r2);
+            float h = max(0.5, r * 0.015); 
+
             vec3 nextPos = pos + dir * h;
             
-            // Detección de intersección con el Disco de Acreción (Plano Y=0)
-            if(pos.y * nextPos.y < 0.0) { 
+            if(pos.y * nextPos.y <= 0.0) { 
                 float t = -pos.y / dir.y;
                 vec3 hit = pos + dir * t;
                 float hitR = length(hit);
                 
-                // Si cruza la zona del disco (anillos de gas caliente)
                 if(hitR > rs * 1.5 && hitR < rs * 6.0) {
                     float gradient = 1.0 - (hitR - rs * 1.5) / (rs * 4.5);
                     
-                    // Estriaciones de gas (ruido matemático)
                     float rings = sin(hitR * 2.0) * 0.5 + 0.5;
                     rings *= sin(hitR * 0.8) * 0.5 + 0.5;
                     float gasDensity = 0.2 + 0.8 * rings; 
                     
-                    // Gradiente Térmico
-                    vec3 hotColor = vec3(1.2, 0.9, 0.6); // Blanco deslumbrante cerca
-                    vec3 coolColor = vec3(0.8, 0.2, 0.0); // Naranja oscuro lejos
+                    vec3 hotColor = vec3(1.2, 0.9, 0.6); 
+                    vec3 coolColor = vec3(0.8, 0.2, 0.0); 
                     vec3 diskCol = mix(coolColor, hotColor, pow(gradient, 1.5)) * gasDensity;
                     
-                    // Efecto Doppler Relativista sobre la luz del disco
                     vec3 diskVel = normalize(vec3(-hit.z, 0.0, hit.x)); 
                     float doppler = dot(dir, diskVel) * gradient; 
                     
                     float dopplerFactor = 1.0 + doppler * 3.0; 
                     diskCol *= dopplerFactor;
                     
-                    // Corrimiento al azul (blueshift) y al rojo (redshift)
                     if(doppler > 0.0) {
                         diskCol.b += doppler * 0.8;
                         diskCol.r -= doppler * 0.3;
@@ -227,18 +257,15 @@ const gargantuaFragmentShader = `
                 }
             }
             
-            // LA LENTE GRAVITACIONAL DE EINSTEIN:
-            // Ecuación de geodésica: a = -1.5 * Rs * L^2 / r^5 * pos
             float x_dot_v = dot(pos, dir);
-            float L2 = r2 - x_dot_v * x_dot_v; // Conservación del Momento Angular
+            float L2 = r2 - x_dot_v * x_dot_v; 
             vec3 accel = -1.5 * rs * L2 / (r2 * r2 * r) * pos;
             
-            dir = normalize(dir + accel * h); // Curvar la luz
+            dir = normalize(dir + accel * h); 
             pos = nextPos;
         }
 
-        if (alpha < 0.01) discard; // Transparente para dejar ver el universo N-Body detrás
-        
+        if (alpha < 0.01) discard; 
         gl_FragColor = vec4(color, alpha);
     }
 `;
@@ -253,8 +280,8 @@ const GalaxyVisualizer = () => {
         const WIDTH = 256; 
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x010102); 
-        // FIX: Expandimos masivamente el plano de corte far de la cámara de 2000 a 5000
-        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 5000);
+        
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100000);
         camera.position.set(0, 70, 200);
 
         const renderer = new THREE.WebGLRenderer({ antialias: false });
@@ -265,22 +292,15 @@ const GalaxyVisualizer = () => {
 
         const controls = new OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
-        // Opcional: limitamos la distancia máxima del zoom para no romper la ilusión jamás
-        controls.maxDistance = 2500; 
+        controls.maxDistance = 20000; 
 
         const renderScene = new RenderPass(scene, camera);
-        // Bloom pass intensificado para la majestuosidad de la luz doblada
         const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 2.2, 0.8, 0.1);
         const composer = new EffectComposer(renderer);
         composer.addPass(renderScene);
         composer.addPass(bloomPass);
 
-        // ==========================================
-        // MALLA DEL AGUJERO NEGRO RAYMARCHED
-        // ==========================================
-        // FIX: El "lienzo" invisible de proyección ahora es gigantesco (4000x4000)
-        // para que no desaparezca al alejar mucho la cámara.
-        const gargantuaGeometry = new THREE.PlaneGeometry(4000, 4000);
+        const gargantuaGeometry = new THREE.PlaneGeometry(100000, 100000);
         const gargantuaMaterial = new THREE.ShaderMaterial({
             vertexShader: gargantuaVertexShader,
             fragmentShader: gargantuaFragmentShader,
@@ -308,7 +328,6 @@ const GalaxyVisualizer = () => {
                 bh1.pos.set(0, 0, 0); bh1.vel.set(0, 0, 0); bh1.mass = 6000;
                 bh2.mass = 0; 
 
-                // Creamos partículas alimentando el vórtice
                 for (let i = 0; i < posArray.length; i += 4) {
                     let r = Math.random() * 200 + 40; 
                     let theta = Math.random() * Math.PI * 2;
@@ -408,7 +427,9 @@ const GalaxyVisualizer = () => {
                 textureVelocity: { value: null },
                 cameraPos: { value: camera.position },
                 useDoppler: { value: 1.0 },
-                isBlackHoleMode: { value: 0.0 }
+                isBlackHoleMode: { value: 0.0 },
+                center1: { value: bh1.pos }, // FIX: Pasamos el núcleo de la galaxia 1
+                center2: { value: bh2.pos }  // FIX: Pasamos el núcleo de la galaxia 2
             },
             vertexShader,
             fragmentShader,
@@ -473,6 +494,8 @@ const GalaxyVisualizer = () => {
                 velVar.material.uniforms.mass2.value = bh2.mass;
                 velVar.material.uniforms.center1.value.copy(bh1.pos);
                 velVar.material.uniforms.center2.value.copy(bh2.pos);
+                material.uniforms.center1.value.copy(bh1.pos);
+                material.uniforms.center2.value.copy(bh2.pos);
 
                 gpuCompute.renderTexture(dtPosition, posVar.renderTargets[0]);
                 gpuCompute.renderTexture(dtPosition, posVar.renderTargets[1]);
@@ -484,8 +507,8 @@ const GalaxyVisualizer = () => {
         const animate = () => {
             requestAnimationFrame(animate);
             controls.update();
+            material.uniforms.cameraPos.value.copy(camera.position);
 
-            // Crucial para la ilusión óptica del Agujero Negro: el lienzo siempre mira a cámara
             if (gargantuaMesh.visible) {
                 gargantuaMesh.lookAt(camera.position);
             }
@@ -504,8 +527,11 @@ const GalaxyVisualizer = () => {
                     bh1.pos.add(bh1.vel.clone().multiplyScalar(currentDt));
                     bh2.pos.add(bh2.vel.clone().multiplyScalar(currentDt));
 
+                    // FIX: Actualizamos los núcleos dinámicos también en el visualizador
                     velVar.material.uniforms.center1.value.copy(bh1.pos);
                     velVar.material.uniforms.center2.value.copy(bh2.pos);
+                    material.uniforms.center1.value.copy(bh1.pos);
+                    material.uniforms.center2.value.copy(bh2.pos);
                 }
 
                 gpuCompute.compute();
