@@ -15,7 +15,7 @@ Tomamos la seguridad y la estabilidad de este simulador muy en serio. Si descubr
 
 En su lugar, te pedimos que reportes el problema de forma privada enviando un correo electrónico a:
 
-📧 **[TU CORREO ELECTRÓNICO AQUÍ]**
+📧 **angel.olivares.rosas2@gmail.com**
 
 Por favor, incluye la siguiente información en tu reporte:
 * Tipo de problema (por ejemplo, desbordamiento de buffer en el shader, inyección, DoS visual).
