@@ -11,9 +11,6 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 // @ts-ignore
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 
-// ==========================================
-// 1. SHADERS FÍSICOS (ESTRELLAS Y GAS)
-// ==========================================
 const computationShaderPosition = `
     uniform float dt;
     void main() {
@@ -50,7 +47,7 @@ const computationShaderVelocity = `
             vec3 diff1 = center1 - pos.xyz;
             float distToSingularity = length(diff1);
             
-            if (distToSingularity < 11.5) {
+            if (distToSingularity < 12.0) {
                 gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
                 return; 
             }
@@ -78,8 +75,8 @@ const vertexShader = `
     uniform sampler2D textureVelocity;
     uniform vec3 cameraPos;
     uniform float isBlackHoleMode;
-    uniform vec3 center1; // Añadido para el brillo correcto de la galaxia
-    uniform vec3 center2; // Añadido para el brillo correcto de la galaxia
+    uniform vec3 center1; 
+    uniform vec3 center2; 
     
     varying float vDensity;
     varying float vDoppler;
@@ -91,12 +88,10 @@ const vertexShader = `
         vec4 vel = texture2D( textureVelocity, uv );
         vWorldPos = pos.xyz;
         
-        // FIX GALAXIAS: Calculamos la distancia dinámicamente según el modo
         float distToCenter;
         if (isBlackHoleMode > 0.5) {
-            distToCenter = length(pos.xyz); // Agujero negro está fijo en 0,0,0
+            distToCenter = length(pos.xyz); 
         } else {
-            // Las galaxias se mueven. Medimos la distancia a su propio núcleo
             float d1 = length(pos.xyz - center1);
             float d2 = length(pos.xyz - center2);
             distToCenter = min(d1, d2);
@@ -104,7 +99,6 @@ const vertexShader = `
         
         vDistToCenter = distToCenter; 
         
-        // Esto devolverá el brillo amarillo/blanco a los núcleos de las galaxias
         vDensity = 1.0 / (1.0 + distToCenter * 0.08);
         vDensity = clamp(vDensity, 0.0, 1.0);
         
@@ -118,7 +112,14 @@ const vertexShader = `
         if (isBlackHoleMode > 0.5 && distToCenter < 12.0) {
             gl_PointSize = 0.0;
         } else {
-            gl_PointSize = ( 18.0 / -mvPosition.z ) * (6.0 / pow(distToCenter + 1.0, 0.2));
+            // FIX GALAXIAS: Transición de tamaño.
+            // Cerca del núcleo (distancia < 5), las partículas son más pequeñas y densas para formar el núcleo brillante.
+            // Lejos del núcleo, se expanden para formar nubes de polvo estelar gigantes.
+            float sizeMultiplier = smoothstep(2.0, 20.0, distToCenter);
+            // Tamaño base pequeño (núcleo) + expansión masiva para el polvo
+            float finalSize = 10.0 + (90.0 * sizeMultiplier); 
+            
+            gl_PointSize = ( finalSize / -mvPosition.z ) * (8.0 / pow(distToCenter + 1.0, 0.2));
         }
     }
 `;
@@ -160,9 +161,10 @@ const fragmentShader = `
             else if (vDistToCenter < 120.0) { r = 1.0; g = 0.5; b = 0.1; } 
             else { r = 0.5; g = 0.1; b = 0.1; } 
         } else {
-            if (vDensity > 0.6) { r = 1.0; g = 1.0; b = 0.9; } 
-            else if (vDensity > 0.3) { r = 0.9; g = 0.8; b = 0.6; } 
-            else { r = 0.3; g = 0.6; b = 1.0; }
+            // Colores Galaxia: Núcleo blanco-amarillento, polvo azulado
+            if (vDensity > 0.7) { r = 1.0; g = 0.95; b = 0.85; } 
+            else if (vDensity > 0.4) { r = 0.9; g = 0.8; b = 0.6; } 
+            else { r = 0.4; g = 0.6; b = 1.0; }
         }
 
         if (useDoppler > 0.5) {
@@ -176,16 +178,32 @@ const fragmentShader = `
 
         vec2 circCoord = 2.0 * gl_PointCoord - 1.0;
         float distSq = dot(circCoord, circCoord);
-        if (distSq > 1.0) discard;
+        if (distSq > 1.0) discard; 
         
-        float alpha = pow(1.0 - distSq, 3.0);
-        gl_FragColor = vec4( r, g, b, alpha * (0.4 + vDensity * 0.4) );
+        float dustShape = exp(-distSq * 3.5); 
+        
+        // FIX GALAXIAS: Transición de opacidad para arreglar el "overflow" del brillo
+        // En el núcleo (distancias bajas), las estrellas son opacas. 
+        // En los brazos de polvo (distancias altas), son casi transparentes.
+        float opacityMultiplier = 1.0 - smoothstep(5.0, 25.0, vDistToCenter);
+        // La opacidad base del polvo es muy bajita (0.05). En el núcleo sube a casi 0.8
+        float baseAlpha = 0.05 + (0.75 * opacityMultiplier);
+        
+        float alpha = dustShape * baseAlpha;
+        
+        if (isBlackHoleMode > 0.5) {
+            float fadeOutRadius = 25.0; 
+            float eventHorizon = 12.0;
+            float distFactor = smoothstep(eventHorizon, fadeOutRadius, vDistToCenter);
+            alpha *= distFactor; 
+        }
+        
+        if (alpha < 0.001) discard; 
+
+        gl_FragColor = vec4( r, g, b, alpha );
     }
 `;
 
-// ==========================================
-// 2. EL MOTOR DE RAYOS RELATIVISTA (GARGANTUA)
-// ==========================================
 const gargantuaVertexShader = `
     varying vec3 vWorldPosition;
     void main() {
@@ -227,9 +245,22 @@ const gargantuaFragmentShader = `
                 vec3 hit = pos + dir * t;
                 float hitR = length(hit);
                 
-                if(hitR > rs * 1.5 && hitR < rs * 6.0) {
-                    float gradient = 1.0 - (hitR - rs * 1.5) / (rs * 4.5);
+                float iscoRadius = rs * 3.0; 
+                float outerRadius = rs * 8.0;
+
+                if(hitR > rs && hitR < outerRadius) {
+                    float gradient = 0.0;
                     
+                    if (hitR < iscoRadius) {
+                        gradient = smoothstep(rs, iscoRadius, hitR) * 0.15; 
+                    } 
+                    else {
+                        gradient = 1.0 - smoothstep(iscoRadius, outerRadius, hitR);
+                        gradient = pow(gradient, 1.2); 
+                    }
+                    
+                    gradient = max(0.0, gradient);
+
                     float rings = sin(hitR * 2.0) * 0.5 + 0.5;
                     rings *= sin(hitR * 0.8) * 0.5 + 0.5;
                     float gasDensity = 0.2 + 0.8 * rings; 
@@ -279,7 +310,7 @@ const GalaxyVisualizer = () => {
 
         const WIDTH = 256; 
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x010102); 
+        scene.background = new THREE.Color(0x000000); 
         
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100000);
         camera.position.set(0, 70, 200);
@@ -295,7 +326,7 @@ const GalaxyVisualizer = () => {
         controls.maxDistance = 20000; 
 
         const renderScene = new RenderPass(scene, camera);
-        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 2.2, 0.8, 0.1);
+        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.8, 0.6, 0.15);
         const composer = new EffectComposer(renderer);
         composer.addPass(renderScene);
         composer.addPass(bloomPass);
@@ -367,7 +398,8 @@ const GalaxyVisualizer = () => {
                             vz = (Math.random() - 0.5) * vMag;
                         } else {
                             x = Math.cos(theta) * r;
-                            y = (Math.random() - 0.5) * 4; 
+                            // Reducido la dispersión en Y para que el disco galáctico sea más nítido
+                            y = (Math.random() - 0.5) * 2.5; 
                             z = Math.sin(theta) * r;
                             const vMag = Math.sqrt((0.5 * centerObj.mass) / r);
                             vx = Math.sin(theta) * vMag;
@@ -428,8 +460,8 @@ const GalaxyVisualizer = () => {
                 cameraPos: { value: camera.position },
                 useDoppler: { value: 1.0 },
                 isBlackHoleMode: { value: 0.0 },
-                center1: { value: bh1.pos }, // FIX: Pasamos el núcleo de la galaxia 1
-                center2: { value: bh2.pos }  // FIX: Pasamos el núcleo de la galaxia 2
+                center1: { value: bh1.pos },
+                center2: { value: bh2.pos } 
             },
             vertexShader,
             fragmentShader,
@@ -527,7 +559,6 @@ const GalaxyVisualizer = () => {
                     bh1.pos.add(bh1.vel.clone().multiplyScalar(currentDt));
                     bh2.pos.add(bh2.vel.clone().multiplyScalar(currentDt));
 
-                    // FIX: Actualizamos los núcleos dinámicos también en el visualizador
                     velVar.material.uniforms.center1.value.copy(bh1.pos);
                     velVar.material.uniforms.center2.value.copy(bh2.pos);
                     material.uniforms.center1.value.copy(bh1.pos);
