@@ -56,7 +56,7 @@ Para correr este laboratorio en un entorno local de desarrollo:
 
 1. Clona el repositorio:
    \`\`\`bash
-   git clone https://github.com/tu-usuario/n-body-astrophysics.git
+   git clone https://github.com/AngelOlivares842/galaxy
    \`\`\`
 2. Instala las dependencias (se requiere Node.js):
    \`\`\`bash
