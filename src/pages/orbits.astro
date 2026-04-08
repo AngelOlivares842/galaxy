@@ -1,0 +1,235 @@
+---
+import OrbitalVisualizer from '../components/OrbitalVisualizer';
+---
+
+<html lang="es">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mekkode | Dinámica Orbital y Sistema Solar</title>
+    <style>
+        :root { color-scheme: dark; }
+        *, *::before, *::after { box-sizing: border-box; }
+
+        body, html {
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            background-color: #020617; color: white; overflow: hidden; 
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+
+        .sim-container { width: 100%; height: 100%; display: flex; flex-direction: column; }
+        
+        .top-navbar {
+            position: relative; z-index: 20;
+            background: rgba(15, 23, 42, 0.95);
+            border-bottom: 1px solid rgba(125, 211, 252, 0.2);
+            padding: 0 20px; height: 50px; display: flex; align-items: center; justify-content: space-between;
+            font-family: 'Courier New', Courier, monospace;
+        }
+        .nav-brand { font-weight: bold; color: #34d399; font-size: 1.1rem; letter-spacing: 1px; }
+        .nav-brand span { color: #facc15; }
+        .nav-links { display: flex; gap: 20px; height: 100%; }
+        .nav-link { 
+            display: flex; align-items: center; color: #94a3b8; 
+            text-decoration: none; font-size: 0.85rem; text-transform: uppercase;
+            padding: 0 10px; border-bottom: 2px solid transparent; transition: all 0.2s;
+        }
+        .nav-link.active { color: #34d399; border-bottom: 2px solid #34d399; background: rgba(52, 211, 153, 0.05); }
+        .nav-link:hover:not(.active) { color: white; border-bottom: 2px solid rgba(255,255,255,0.5); }
+
+        .workspace { flex: 1; position: relative; display: flex; overflow: hidden; }
+        .visualizer-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; }
+        
+        .ui-overlay { 
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
+            z-index: 10; pointer-events: none; padding: 20px; display: flex; justify-content: space-between;
+            overflow: hidden;
+        }
+        
+        .controls-wrapper { display: flex; flex-direction: column; height: 100%; padding-bottom: 10px; }
+        
+        header { margin-bottom: 1rem; text-shadow: 0 2px 10px rgba(0,0,0,0.8); flex-shrink: 0; }
+        header h1 { font-size: 1.2rem; font-weight: 800; letter-spacing: 1px; color: #38bdf8; margin: 0; }
+        header p { font-size: 0.8rem; color: #a1a1aa; margin-top: 5px; }
+
+        .sci-panel {
+            background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(8px);
+            border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 8px;
+            padding: 20px; width: 340px; pointer-events: auto; box-shadow: 0 4px 30px rgba(0, 0, 0, 0.6);
+            flex: 1; overflow-y: auto; min-height: 0;
+        }
+
+        .sci-panel::-webkit-scrollbar { width: 6px; }
+        .sci-panel::-webkit-scrollbar-thumb { background: #38bdf8; border-radius: 3px; }
+
+        .telemetry-panel {
+            background: rgba(0, 0, 0, 0.85); backdrop-filter: blur(8px);
+            border: 1px solid rgba(52, 211, 153, 0.3); border-radius: 8px;
+            padding: 15px; width: 300px; pointer-events: auto; align-self: flex-start; font-family: 'Courier New', Courier, monospace;
+            flex-shrink: 0;
+        }
+        .telemetry-panel h2 { font-size: 0.85rem; color: #34d399; margin-top: 0; margin-bottom: 1rem; border-bottom: 1px solid rgba(52, 211, 153, 0.3); padding-bottom: 5px; text-transform: uppercase; }
+        .telemetry-group { margin-bottom: 1rem; }
+        .telemetry-group h3 { font-size: 0.65rem; color: #94a3b8; text-transform: uppercase; margin-bottom: 4px; }
+        .telemetry-row { display: flex; justify-content: space-between; font-size: 0.75rem; margin-bottom: 3px; color: #cbd5e1; }
+        .telemetry-value { color: #facc15; font-weight: bold; }
+
+        .data-block { margin-bottom: 1.2rem; }
+        .control-block { margin-top: 1.2rem; padding-top: 1rem; border-top: 1px dashed rgba(52, 211, 153, 0.3); }
+        .slider-container { display: flex; flex-direction: column; gap: 6px; margin-bottom: 15px; }
+        .slider-container label { font-size: 0.8rem; color: #e0e7ff; display: flex; justify-content: space-between; }
+        .slider-container span { color: #facc15; font-weight: bold; font-family: 'Courier New', monospace; }
+        
+        /* * FIX VITAL: Sliders Nativos puros. 
+         * Eliminados los seudoelementos que hacían invisible la barra en tu navegador. 
+         */
+        input[type=range] { 
+            width: 100%; 
+            margin: 10px 0; 
+            cursor: pointer; 
+        }
+        
+        .btn-action { width: 100%; padding: 12px; margin-top: 8px; font-weight: bold; border-radius: 6px; cursor: pointer; transition: all 0.2s; text-transform: uppercase; font-size: 0.75rem; letter-spacing: 1px; border: none; }
+        .btn-reset { background: rgba(56, 189, 248, 0.2); border: 1px solid rgba(56, 189, 248, 0.5); color: #bae6fd; }
+        .btn-reset:hover { background: rgba(56, 189, 248, 0.4); color: white; }
+        
+        .btn-thrust { background: rgba(249, 115, 22, 0.15); border: 1px solid rgba(249, 115, 22, 0.4); color: #fdba74; text-align: left; padding-left: 15px;}
+        .btn-thrust:hover { background: rgba(249, 115, 22, 0.3); color: white; }
+        .btn-thrust:active { background: rgba(249, 115, 22, 0.8); color: white; }
+        .btn-thrust.blue { background: rgba(56, 189, 248, 0.15); border-color: rgba(56, 189, 248, 0.4); color: #bae6fd; }
+        .btn-thrust.blue:hover { background: rgba(56, 189, 248, 0.3); color: white; }
+        .btn-thrust.blue:active { background: rgba(56, 189, 248, 0.8); color: white; }
+        .btn-thrust.green { background: rgba(16, 185, 129, 0.15); border-color: rgba(16, 185, 129, 0.4); color: #a7f3d0; }
+        .btn-thrust.green:hover { background: rgba(16, 185, 129, 0.3); color: white; }
+        .btn-thrust.green:active { background: rgba(16, 185, 129, 0.8); color: white; }
+        .btn-thrust.purple { background: rgba(192, 132, 252, 0.15); border-color: rgba(192, 132, 252, 0.4); color: #e9d5ff; }
+        .btn-thrust.purple:hover { background: rgba(192, 132, 252, 0.3); color: white; }
+        .btn-thrust.purple:active { background: rgba(192, 132, 252, 0.8); color: white; }
+
+        .select-container { display: flex; flex-direction: column; gap: 4px; margin-bottom: 15px; font-size: 0.8rem; color: #e0e7ff; }
+        select { background: rgba(15, 23, 42, 0.9); color: #facc15; border: 1px solid rgba(125, 211, 252, 0.4); padding: 8px; border-radius: 4px; outline: none; font-weight: bold; cursor: pointer; font-size: 0.85rem;}
+    </style>
+</head>
+<body>
+    <main class="sim-container">
+        
+        <nav class="top-navbar">
+            <div class="nav-brand">Angel<span>_</span>Aerospace</div>
+            <div class="nav-links">
+                <a href="/" class="nav-link">Astrofísica N-Body</a>
+                <a href="/orbits" class="nav-link active">Dinámica Orbital y Cohetes</a>
+            </div>
+        </nav>
+
+        <div class="workspace">
+            <div class="ui-overlay">
+                <div class="controls-wrapper">
+                    <header>
+                        <h1>Navegación Estelar 1:1</h1>
+                        <p>Floating Origin Architecture | 64-bit</p>
+                    </header>
+                    
+                    <aside class="sci-panel">
+                        <div class="data-block">
+                            <div class="select-container">
+                                <label style="color: #38bdf8;">CUERPO DE INFLUENCIA (S.O.I):</label>
+                                <select id="planetSelect" style="border-color: #38bdf8; background: rgba(56, 189, 248, 0.1);">
+                                    <option value="sun">El Sol (Estrella Central)</option>
+                                    <option value="mercury">Mercurio</option>
+                                    <option value="venus">Venus</option>
+                                    <option value="earth" selected>La Tierra</option>
+                                    <option value="moon">-- La Luna</option>
+                                    <option value="mars">Marte</option>
+                                    <option value="jupiter">Júpiter</option>
+                                    <option value="io">-- Ío</option>
+                                    <option value="europa">-- Europa</option>
+                                    <option value="saturn">Saturno</option>
+                                    <option value="titan">-- Titán</option>
+                                    <option value="uranus">Urano</option>
+                                    <option value="neptune">Neptuno</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="data-block control-block">
+                            <h3 style="color: #34d399;">Parámetros de Inyección Auto-Ajustables</h3>
+                            <div class="slider-container">
+                                <label>Vector (Z) - Altitud Inicial (km): <span id="orbitAltDisplay">400</span></label>
+                                <input type="range" id="orbitAltSlider" min="100" max="35000" step="100" value="400" />
+                            </div>
+                            <div class="slider-container">
+                                <label>Vector (X) - Vel. Tangencial (km/s): <span id="orbitVelDisplay">7.67</span></label>
+                                <input type="range" id="orbitVelSlider" min="1.0" max="15.0" step="0.01" value="7.67" />
+                            </div>
+                            <button id="injectBtn" class="btn-action btn-reset">Inyectar Vehículo a Órbita</button>
+                        </div>
+
+                        <div class="data-block control-block">
+                            <h3 style="color: #fb923c;">Acelerador Temporal Macro</h3>
+                            <div class="slider-container">
+                                <label>Time Warp (Acelerar Tiempo): <span id="timeWarpDisplay">1x</span></label>
+                                <input type="range" id="timeWarpSlider" min="1" max="100000" step="10" value="1" />
+                            </div>
+                        </div>
+
+                        <div class="data-block control-block" style="padding-bottom: 15px;">
+                            <h3 style="color: #fb923c;">Sistemas RCS (Empuje Manual)</h3>
+                            
+                            <button id="btnPrograde" class="btn-action btn-thrust blue">▲ Quemar Progrado (+V)</button>
+                            <button id="btnRetrograde" class="btn-action btn-thrust">▼ Quemar Retrógrado (-V)</button>
+                            <button id="btnNormal" class="btn-action btn-thrust green">▶ Quemar Normal (Plano Y)</button>
+                            <button id="btnRadial" class="btn-action btn-thrust purple">🎯 Quemar Radial (Centro)</button>
+                            
+                            <div class="slider-container" style="margin-top: 15px;">
+                                <label>Potencia de Empuje (Δv m/s²): <span id="thrustPowerDisplay">9.8</span></label>
+                                <input type="range" id="thrustPowerSlider" min="1.0" max="500.0" step="0.1" value="9.8" />
+                            </div>
+                        </div>
+                    </aside>
+                </div>
+
+                <div style="display: flex; flex-direction: column; gap: 15px; z-index: 10; pointer-events: none;">
+                    
+                    <aside class="telemetry-panel">
+                        <h2 style="color: #c084fc; border-color: rgba(192, 132, 252, 0.3);">Escáner Astronómico J2000</h2>
+                        <div class="telemetry-group">
+                            <h3>Cuerpo Seleccionado (Centro = 0,0,0)</h3>
+                            <div class="telemetry-row"><span>Nombre:</span> <span id="hud-planet-name" class="telemetry-value" style="color: #e9d5ff;">La Tierra</span></div>
+                            <div class="telemetry-row"><span>Órbita respecto a:</span> <span id="hud-planet-parent" class="telemetry-value">--</span></div>
+                            <div class="telemetry-row"><span>Período Orbital:</span> <span id="hud-planet-period" class="telemetry-value">-- días</span></div>
+                            <div class="telemetry-row"><span>Vel. Orbital Media:</span> <span id="hud-planet-vel" class="telemetry-value">-- km/s</span></div>
+                        </div>
+                        <div class="telemetry-group">
+                            <h3>Parámetros Keplerianos Reales</h3>
+                            <div class="telemetry-row"><span>Semieje Mayor (a):</span> <span id="hud-planet-sma" class="telemetry-value">-- AU</span></div>
+                            <div class="telemetry-row"><span>Excentricidad (e):</span> <span id="hud-planet-ecc" class="telemetry-value">--</span></div>
+                            <div class="telemetry-row"><span>Inclinación (i):</span> <span id="hud-planet-inc" class="telemetry-value">--°</span></div>
+                        </div>
+                    </aside>
+
+                    <aside class="telemetry-panel">
+                        <h2>Telemetría Navegación Cohete</h2>
+                        <div class="telemetry-group">
+                            <h3>Vectores Instantáneos</h3>
+                            <div class="telemetry-row"><span>S.O.I Actual:</span> <span id="hud-soi" class="telemetry-value blue">--</span></div>
+                            <div class="telemetry-row"><span>Velocidad Abs. (v):</span> <span id="hud-vel" class="telemetry-value">-- km/s</span></div>
+                            <div class="telemetry-row"><span>Altitud MSL (h):</span> <span id="hud-alt" class="telemetry-value">-- km</span></div>
+                        </div>
+                        <div class="telemetry-group">
+                            <h3>Métrica Kepleriana</h3>
+                            <div class="telemetry-row"><span>Apoapsis (Apo):</span> <span id="hud-apo" class="telemetry-value">-- km</span></div>
+                            <div class="telemetry-row"><span>Periapsis (Peri):</span> <span id="hud-peri" class="telemetry-value">-- km</span></div>
+                            <div class="telemetry-row"><span>Excentricidad (e):</span> <span id="hud-ecc" class="telemetry-value">--</span></div>
+                        </div>
+                    </aside>
+                </div>
+            </div>
+            
+            <div class="visualizer-container">
+                <OrbitalVisualizer client:only="react" />
+            </div>
+
+        </div>
+    </main>
+</body>
+</html>
