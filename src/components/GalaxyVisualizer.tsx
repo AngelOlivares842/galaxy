@@ -52,17 +52,16 @@ const computationShaderVelocity = `
             vec3 diff1 = center1 - pos.xyz;
             float distSq = dot(diff1, diff1);
             
-            if (distSq < 144.0) { // dist < 12.0 (Radio de Schwarzschild)
+            if (distSq < 144.0) { // dist < 12.0
                 gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
                 return; 
             }
 
-            // OPTIMIZACIÓN EXTREMA: inversesqrt es infinitamente más rápido que pow() en hardware
-            float invDist = inversesqrt(distSq + 15.0); // Softening integrado
+            float invDist = inversesqrt(distSq + 15.0); 
             float invDistCube = invDist * invDist * invDist;
             
             acc += actualGravity * mass1 * diff1 * invDistCube;
-            acc -= vel.xyz * 0.015; // Fricción relativista del disco de acreción
+            acc -= vel.xyz * 0.015; 
         } else {
             vec3 diff1 = center1 - pos.xyz;
             float distSq1 = dot(diff1, diff1) + softening;
@@ -119,7 +118,6 @@ const vertexShader = `
         if (isBlackHoleMode > 0.5 && distToCenter < 12.0) {
             gl_PointSize = 0.0;
         } else {
-            // Puntos minúsculos para soportar 1 millón de partículas sin saturar la pantalla
             gl_PointSize = ( 20.0 / -mvPosition.z );
         }
     }
@@ -134,18 +132,15 @@ const fragmentShader = `
 
     void main() {
         if (isBlackHoleMode > 0.5 && vDistToCenter < 22.0) {
-            discard; // Cortafuegos térmico pre-ISCO
+            discard; 
         }
 
-        // Color térmico base
         vec3 color;
         if (isBlackHoleMode > 0.5) {
-            // Gradiente cinemático: Blanco azulado (centro) -> Naranja (medio) -> Rojo oscuro (bordes)
             vec3 hotCenter = vec3(0.6, 0.8, 1.0);
             vec3 warmMid = vec3(1.0, 0.5, 0.1);
             vec3 coldEdge = vec3(0.3, 0.05, 0.0);
             
-            float mixFactor = smoothstep(22.0, 150.0, vDistToCenter);
             if (vDistToCenter < 60.0) {
                 color = mix(hotCenter, warmMid, smoothstep(22.0, 60.0, vDistToCenter));
             } else {
@@ -155,26 +150,23 @@ const fragmentShader = `
             color = mix(vec3(1.0, 0.9, 0.7), vec3(0.2, 0.4, 0.8), smoothstep(0.0, 80.0, vDistToCenter));
         }
 
-        // Efecto Doppler Relativista
         if (useDoppler > 0.5) {
             float shift = clamp(vDoppler * 0.1, -0.8, 0.8);
             if (shift > 0.0) {
-                color.b += shift; color.r -= shift * 0.5; // Blueshift
+                color.b += shift; color.r -= shift * 0.5; 
             } else {
-                color.r += abs(shift); color.b -= abs(shift) * 0.5; // Redshift
+                color.r += abs(shift); color.b -= abs(shift) * 0.5; 
             }
         }
 
-        // Forma de la partícula (Círculo suave)
         vec2 circCoord = 2.0 * gl_PointCoord - 1.0;
         float distSq = dot(circCoord, circCoord);
         if (distSq > 1.0) discard; 
         
-        // Transparencia masiva para crear efecto humo volumétrico
         float alpha = exp(-distSq * 3.0) * 0.015; 
         
         if (isBlackHoleMode > 0.5) {
-            alpha *= smoothstep(22.0, 45.0, vDistToCenter); // Suavizar entrada al agujero
+            alpha *= smoothstep(22.0, 45.0, vDistToCenter); 
         }
         
         if (alpha < 0.001) discard; 
@@ -184,7 +176,7 @@ const fragmentShader = `
 `;
 
 // ============================================================================
-// 3. SHADERS DEL AGUJERO NEGRO (LENTE GRAVITACIONAL ACOTADO)
+// 3. SHADERS DEL AGUJERO NEGRO (LENTE GRAVITACIONAL ACOTADO) - FÍSICA MEJORADA
 // ============================================================================
 
 const gargantuaVertexShader = `
@@ -200,6 +192,10 @@ const gargantuaVertexShader = `
 const gargantuaFragmentShader = `
     varying vec3 vWorldPosition;
 
+    float hash(vec2 p) {
+        return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+    }
+
     void main() {
         vec3 pos = cameraPosition;
         vec3 dir = normalize(vWorldPosition - cameraPosition);
@@ -208,17 +204,16 @@ const gargantuaFragmentShader = `
         vec3 color = vec3(0.0);
         float alpha = 0.0;
         
-        // Bucle de Raymarching optimizado
         for(int i = 0; i < 250; i++) { 
             float r2 = dot(pos, pos);
             
-            if(r2 < rs * rs) {
+            if(r2 < rs * rs * 1.02) {
                 alpha = 1.0; 
                 break;
             }
             
             float r = sqrt(r2);
-            float h = max(0.5, r * 0.02); // Pasos más grandes = mejor rendimiento
+            float h = max(0.5, r * 0.02); 
 
             vec3 nextPos = pos + dir * h; 
             
@@ -228,24 +223,50 @@ const gargantuaFragmentShader = `
                 float hitR = length(hit);
                 
                 float iscoRadius = rs * 3.0; 
-                float outerRadius = rs * 7.0; 
+                float outerRadius = rs * 8.0; 
 
-                if(hitR > rs && hitR < outerRadius) {
-                    float gradient = hitR < iscoRadius ? smoothstep(rs, iscoRadius, hitR) * 0.15 : pow(1.0 - smoothstep(iscoRadius, outerRadius, hitR), 1.2);
+                if(hitR > rs * 1.2 && hitR < outerRadius) {
                     
-                    float rings = sin(hitR * 2.5) * 0.5 + 0.5;
-                    float gasDensity = 0.2 + 0.8 * rings; 
+                    float temp;
+                    if(hitR < iscoRadius) {
+                        temp = smoothstep(rs * 1.2, iscoRadius, hitR);
+                    } else {
+                        temp = 1.0 - smoothstep(iscoRadius, outerRadius, hitR);
+                    }
+                    temp = pow(temp, 1.2); 
                     
-                    vec3 diskCol = mix(vec3(0.8, 0.2, 0.0), vec3(1.0, 0.8, 0.5), pow(gradient, 1.5)) * gasDensity;
+                    vec3 colCold = vec3(0.1, 0.0, 0.0);       
+                    vec3 colWarm = vec3(0.9, 0.3, 0.0);       
+                    vec3 colHot = vec3(1.0, 0.9, 0.7);        
+                    vec3 colCorona = vec3(0.7, 0.9, 1.0);     
                     
+                    vec3 diskCol;
+                    if (temp < 0.4) diskCol = mix(colCold, colWarm, temp / 0.4);
+                    else if (temp < 0.8) diskCol = mix(colWarm, colHot, (temp - 0.4) / 0.4);
+                    else diskCol = mix(colHot, colCorona, (temp - 0.8) / 0.2);
+                    
+                    float gasNoise = mix(0.8, 1.0, hash(hit.xz * 0.5));
+                    diskCol *= gasNoise;
+                    
+                    // FIX VISUAL: Control del Beaming Relativista para pantallas
                     vec3 diskVel = normalize(vec3(-hit.z, 0.0, hit.x)); 
-                    float doppler = dot(dir, diskVel) * gradient; 
+                    float orbitalSpeed = sqrt(rs / (2.0 * hitR)); 
+                    float approach = dot(dir, diskVel) * orbitalSpeed * 1.5; 
                     
-                    diskCol *= (1.0 + doppler * 3.0);
-                    if(doppler > 0.0) { diskCol.b += doppler * 0.8; diskCol.r -= doppler * 0.3; } 
-                    else { diskCol.r += abs(doppler) * 0.5; }
+                    // Limitamos el factor Doppler para no "quemar" la imagen a blanco puro
+                    float dopplerFactor = max(0.2, 1.0 + approach * 0.8);
+                    float beaming = pow(dopplerFactor, 2.0); // D^2 en lugar de D^3
                     
-                    float opacity = 0.85 * gradient;
+                    // Cortafuegos de brillo máximo (Clamp)
+                    diskCol *= clamp(beaming, 0.1, 2.2);
+                    
+                    if(approach > 0.0) { 
+                        diskCol = mix(diskCol, vec3(0.5, 0.8, 1.0), approach * 0.5); 
+                    } else { 
+                        diskCol = mix(diskCol, vec3(0.8, 0.1, 0.0), abs(approach) * 0.5); 
+                    }
+                    
+                    float opacity = 0.85 * temp;
                     color += diskCol * (1.0 - alpha) * opacity;
                     alpha += opacity * (1.0 - alpha);
                 }
@@ -276,7 +297,6 @@ const GalaxyVisualizer = () => {
         if (!containerRef.current) return;
         let animationFrameId: number;
 
-        // ¡ATENCIÓN!: 1024 x 1024 = 1,048,576 Partículas simultáneas.
         const WIDTH = 1024; 
         
         const scene = new THREE.Scene();
@@ -285,11 +305,12 @@ const GalaxyVisualizer = () => {
         const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 100000);
         camera.position.set(0, 100, 250);
 
-        const renderer = new THREE.WebGLRenderer({ antialias: false }); // Desactivado para max performance
+        const renderer = new THREE.WebGLRenderer({ antialias: false }); 
         renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Limitar a 2x
-        renderer.toneMapping = THREE.ACESFilmicToneMapping; // Mapeo de color cinematográfico
-        renderer.toneMappingExposure = 1.2;
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); 
+        renderer.toneMapping = THREE.ACESFilmicToneMapping; 
+        // FIX VISUAL: Bajamos la exposición del entorno para que los brillos destaquen sin saturar
+        renderer.toneMappingExposure = 1.0; 
         containerRef.current.appendChild(renderer.domElement);
 
         const controls = new OrbitControls(camera, renderer.domElement);
@@ -297,12 +318,13 @@ const GalaxyVisualizer = () => {
         controls.maxDistance = 20000; 
 
         const renderScene = new RenderPass(scene, camera);
-        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.2);
+        // FIX VISUAL: Ajustamos el Bloom. Intensidad bajada de 1.5 a 0.8, y el threshold subido
+        // para que solo las partes hiper-calientes brillen como neón, preservando la textura.
+        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.8, 0.4, 0.4);
         const composer = new EffectComposer(renderer);
         composer.addPass(renderScene);
         composer.addPass(bloomPass);
 
-        // OPTIMIZACIÓN: Un plano que solo abarca el área del agujero negro para no matar la GPU
         const gargantuaGeometry = new THREE.PlaneGeometry(800, 800);
         const gargantuaMaterial = new THREE.ShaderMaterial({
             vertexShader: gargantuaVertexShader,
@@ -331,10 +353,10 @@ const GalaxyVisualizer = () => {
                 bh2.mass = 0; 
 
                 for (let i = 0; i < posArray.length; i += 4) {
-                    let r = Math.random() * 250 + 25; // Disco más denso y amplio
+                    let r = Math.random() * 250 + 25; 
                     let theta = Math.random() * Math.PI * 2;
                     let x = Math.cos(theta) * r;
-                    let y = (Math.random() - 0.5) * (r * 0.05); // Disco muy plano
+                    let y = (Math.random() - 0.5) * (r * 0.05); 
                     let z = Math.sin(theta) * r;
 
                     const vMag = Math.sqrt((0.5 * bh1.mass) / r);
@@ -515,7 +537,6 @@ const GalaxyVisualizer = () => {
             material.uniforms.cameraPos.value.copy(camera.position);
 
             if (gargantuaMesh.visible) {
-                // El raymarcher siempre mira a la cámara
                 gargantuaMesh.lookAt(camera.position);
             }
 
@@ -546,7 +567,6 @@ const GalaxyVisualizer = () => {
 
             composer.render();
 
-            // --- TELEMETRÍA (1 MILLÓN DE PARTÍCULAS) ---
             frameCount++;
             const now = performance.now();
             if (now - lastTime >= 1000) { 
@@ -558,19 +578,16 @@ const GalaxyVisualizer = () => {
                 }
 
                 const elEntities = getSafeElement('hud-entities');
-                if (elEntities) elEntities.innerText = (WIDTH * WIDTH).toLocaleString(); // 1,048,576
+                if (elEntities) elEntities.innerText = (WIDTH * WIDTH).toLocaleString();
 
                 let gflops = 0;
-                // Ajustado para 1,048,576 partículas
                 const particlesFlops = (WIDTH * WIDTH) * 40 * fps; 
                 
                 if (currentMode === 'blackhole') {
-                    // El raymarching está optimizado por la escala del mesh
                     const raymarchingFlops = window.innerWidth * window.innerHeight * 100 * 50 * fps;
                     gflops = (particlesFlops + raymarchingFlops) / 1e9;
                     
                     const safeSet = (id: string, val: string) => { const el = getSafeElement(id); if(el) el.innerText = val; };
-                    
                     safeSet('hud-ray-steps', 'Activada (Lente Grav.)');
                     safeSet('hud-mass', '6.0 x 10^6 M☉');
                     safeSet('hud-rs', '12.0 u');
@@ -582,7 +599,6 @@ const GalaxyVisualizer = () => {
                 } else {
                     gflops = particlesFlops / 1e9;
                     const safeSet = (id: string, val: string) => { const el = getSafeElement(id); if(el) el.innerText = val; };
-                    
                     safeSet('hud-ray-steps', 'Inactiva');
                     safeSet('hud-mass', 'Sistema Binario');
                     safeSet('hud-rs', 'N/A');
