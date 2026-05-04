@@ -12,7 +12,7 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 
 // ============================================================================
-// 1. SHADERS DE CÓMPUTO (GPGPU) - MOTOR FÍSICO N-BODY
+// 1. SHADERS DE CÓMPUTO (GPGPU) - MOTOR FÍSICO N-BODY 1 MILLÓN DE PARTÍCULAS
 // ============================================================================
 
 const computationShaderPosition = `
@@ -50,26 +50,29 @@ const computationShaderVelocity = `
         if (isBlackHoleMode > 0.5) {
             float actualGravity = max(gravity, 0.08); 
             vec3 diff1 = center1 - pos.xyz;
-            float distToSingularity = length(diff1);
+            float distSq = dot(diff1, diff1);
             
-            if (distToSingularity < 12.0) {
+            if (distSq < 144.0) { // dist < 12.0 (Radio de Schwarzschild)
                 gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
                 return; 
             }
 
-            float effectiveSoftening = 15.0; 
-            float distSq1 = dot(diff1, diff1) + effectiveSoftening;
+            // OPTIMIZACIÓN EXTREMA: inversesqrt es infinitamente más rápido que pow() en hardware
+            float invDist = inversesqrt(distSq + 15.0); // Softening integrado
+            float invDistCube = invDist * invDist * invDist;
             
-            acc += actualGravity * mass1 * diff1 * pow(distSq1, -1.5);
-            acc -= vel.xyz * 0.025; 
+            acc += actualGravity * mass1 * diff1 * invDistCube;
+            acc -= vel.xyz * 0.015; // Fricción relativista del disco de acreción
         } else {
             vec3 diff1 = center1 - pos.xyz;
             float distSq1 = dot(diff1, diff1) + softening;
-            acc += gravity * mass1 * diff1 * pow(distSq1, -1.5);
+            float invDistCube1 = inversesqrt(distSq1) / distSq1;
+            acc += gravity * mass1 * diff1 * invDistCube1;
 
             vec3 diff2 = center2 - pos.xyz;
             float distSq2 = dot(diff2, diff2) + softening;
-            acc += gravity * mass2 * diff2 * pow(distSq2, -1.5);
+            float invDistCube2 = inversesqrt(distSq2) / distSq2;
+            acc += gravity * mass2 * diff2 * invDistCube2;
         }
 
         gl_FragColor = vec4( vel.xyz + acc * dt, 1.0 );
@@ -77,7 +80,7 @@ const computationShaderVelocity = `
 `;
 
 // ============================================================================
-// 2. SHADERS DE MATERIAL (RENDERIZADO DE PARTÍCULAS / GAS)
+// 2. SHADERS DE MATERIAL (RENDERIZADO VOLUMÉTRICO MILLION-PARTICLE)
 // ============================================================================
 
 const vertexShader = `
@@ -88,15 +91,12 @@ const vertexShader = `
     uniform vec3 center1; 
     uniform vec3 center2; 
     
-    varying float vDensity;
     varying float vDoppler;
     varying float vDistToCenter; 
-    varying vec3 vWorldPos; 
 
     void main() {
         vec4 pos = texture2D( texturePosition, uv );
         vec4 vel = texture2D( textureVelocity, uv );
-        vWorldPos = pos.xyz;
         
         float distToCenter;
         if (isBlackHoleMode > 0.5) {
@@ -109,9 +109,6 @@ const vertexShader = `
         
         vDistToCenter = distToCenter; 
         
-        vDensity = 1.0 / (1.0 + distToCenter * 0.08);
-        vDensity = clamp(vDensity, 0.0, 1.0);
-        
         vec3 dirToCamera = normalize(cameraPos - pos.xyz);
         float approachSpeed = dot(vel.xyz, dirToCamera);
         vDoppler = approachSpeed;
@@ -122,9 +119,8 @@ const vertexShader = `
         if (isBlackHoleMode > 0.5 && distToCenter < 12.0) {
             gl_PointSize = 0.0;
         } else {
-            float sizeMultiplier = smoothstep(2.0, 20.0, distToCenter);
-            float finalSize = 10.0 + (90.0 * sizeMultiplier); 
-            gl_PointSize = ( finalSize / -mvPosition.z ) * (8.0 / pow(distToCenter + 1.0, 0.2));
+            // Puntos minúsculos para soportar 1 millón de partículas sin saturar la pantalla
+            gl_PointSize = ( 20.0 / -mvPosition.z );
         }
     }
 `;
@@ -132,90 +128,63 @@ const vertexShader = `
 const fragmentShader = `
     uniform float useDoppler;
     uniform float isBlackHoleMode;
-    uniform vec3 cameraPos;
     
-    varying float vDensity;
     varying float vDoppler;
     varying float vDistToCenter;
-    varying vec3 vWorldPos;
 
     void main() {
-        if (isBlackHoleMode > 0.5) {
-            // FIX: VAPORIZACIÓN DE PLASMA PRE-ISCO
-            // Si la partícula entra en la zona termal límite (radio 22.0),
-            // la destruimos matemáticamente *antes* del renderizado. 
-            // Esto evita que el Additive Blending acumule "puntitos" sobre la zona oscura.
-            float plasmaBoundary = 22.0; 
-            if (vDistToCenter < plasmaBoundary) {
-                discard; 
-            }
-
-            vec3 dirToStar = normalize(vWorldPos - cameraPos);
-            vec3 dirToCenter = -cameraPos; 
-            float tca = dot(dirToCenter, dirToStar);
-            if (tca > 0.0) {
-                float d2 = dot(dirToCenter, dirToCenter) - tca * tca;
-                float radius = 12.0; 
-                if (d2 < radius * radius) {
-                    float thc = sqrt(radius * radius - d2);
-                    float t0 = tca - thc; 
-                    float distToStar = length(vWorldPos - cameraPos);
-                    if (distToStar > t0) {
-                        discard; 
-                    }
-                }
-            }
+        if (isBlackHoleMode > 0.5 && vDistToCenter < 22.0) {
+            discard; // Cortafuegos térmico pre-ISCO
         }
 
-        float r = 0.0, g = 0.0, b = 0.0;
-        
+        // Color térmico base
+        vec3 color;
         if (isBlackHoleMode > 0.5) {
-            if (vDistToCenter < 25.0) { r = 1.0; g = 1.0; b = 1.0; } 
-            else if (vDistToCenter < 60.0) { r = 0.4; g = 0.8; b = 1.0; } 
-            else if (vDistToCenter < 120.0) { r = 1.0; g = 0.5; b = 0.1; } 
-            else { r = 0.5; g = 0.1; b = 0.1; } 
-        } else {
-            if (vDensity > 0.7) { r = 1.0; g = 0.95; b = 0.85; } 
-            else if (vDensity > 0.4) { r = 0.9; g = 0.8; b = 0.6; } 
-            else { r = 0.4; g = 0.6; b = 1.0; }
-        }
-
-        if (useDoppler > 0.5) {
-            float shift = clamp(vDoppler * 0.08, -0.6, 0.6);
-            if (shift > 0.0) {
-                b += shift; r -= shift * 0.5; 
+            // Gradiente cinemático: Blanco azulado (centro) -> Naranja (medio) -> Rojo oscuro (bordes)
+            vec3 hotCenter = vec3(0.6, 0.8, 1.0);
+            vec3 warmMid = vec3(1.0, 0.5, 0.1);
+            vec3 coldEdge = vec3(0.3, 0.05, 0.0);
+            
+            float mixFactor = smoothstep(22.0, 150.0, vDistToCenter);
+            if (vDistToCenter < 60.0) {
+                color = mix(hotCenter, warmMid, smoothstep(22.0, 60.0, vDistToCenter));
             } else {
-                r += abs(shift); b -= abs(shift) * 0.5; 
+                color = mix(warmMid, coldEdge, smoothstep(60.0, 150.0, vDistToCenter));
+            }
+        } else {
+            color = mix(vec3(1.0, 0.9, 0.7), vec3(0.2, 0.4, 0.8), smoothstep(0.0, 80.0, vDistToCenter));
+        }
+
+        // Efecto Doppler Relativista
+        if (useDoppler > 0.5) {
+            float shift = clamp(vDoppler * 0.1, -0.8, 0.8);
+            if (shift > 0.0) {
+                color.b += shift; color.r -= shift * 0.5; // Blueshift
+            } else {
+                color.r += abs(shift); color.b -= abs(shift) * 0.5; // Redshift
             }
         }
 
+        // Forma de la partícula (Círculo suave)
         vec2 circCoord = 2.0 * gl_PointCoord - 1.0;
         float distSq = dot(circCoord, circCoord);
         if (distSq > 1.0) discard; 
         
-        float dustShape = exp(-distSq * 3.5); 
+        // Transparencia masiva para crear efecto humo volumétrico
+        float alpha = exp(-distSq * 3.0) * 0.015; 
         
-        float opacityMultiplier = 1.0 - smoothstep(5.0, 25.0, vDistToCenter);
-        float baseAlpha = 0.05 + (0.75 * opacityMultiplier);
-        
-        float alpha = dustShape * baseAlpha;
-        
-        // FIX: Transición suavizada agresiva conectada al plasmaBoundary
         if (isBlackHoleMode > 0.5) {
-            float fadeOutStart = 45.0; // Comenzar a desvanecer desde mucho más lejos
-            float plasmaBoundary = 22.0; // El punto de vaporización total
-            float distFactor = smoothstep(plasmaBoundary, fadeOutStart, vDistToCenter);
-            alpha *= pow(distFactor, 2.0); // Transición cuadrática para limpiar mejor el borde interior
+            alpha *= smoothstep(22.0, 45.0, vDistToCenter); // Suavizar entrada al agujero
         }
         
         if (alpha < 0.001) discard; 
 
-        gl_FragColor = vec4( r, g, b, alpha );
+        gl_FragColor = vec4( color, alpha );
     }
 `;
 
 // ============================================================================
-// 3. SHADERS DEL AGUJERO NEGRO (RAYMARCHING RELATIVISTA)
+// 3. SHADERS DEL AGUJERO NEGRO (LENTE GRAVITACIONAL ACOTADO)
 // ============================================================================
 
 const gargantuaVertexShader = `
@@ -236,11 +205,11 @@ const gargantuaFragmentShader = `
         vec3 dir = normalize(vWorldPosition - cameraPosition);
         
         float rs = 12.0; 
-        
         vec3 color = vec3(0.0);
         float alpha = 0.0;
         
-        for(int i = 0; i < 400; i++) { 
+        // Bucle de Raymarching optimizado
+        for(int i = 0; i < 250; i++) { 
             float r2 = dot(pos, pos);
             
             if(r2 < rs * rs) {
@@ -248,10 +217,8 @@ const gargantuaFragmentShader = `
                 break;
             }
             
-            if(r2 > 100000000.0) break; 
-
             float r = sqrt(r2);
-            float h = max(0.5, r * 0.015); 
+            float h = max(0.5, r * 0.02); // Pasos más grandes = mejor rendimiento
 
             vec3 nextPos = pos + dir * h; 
             
@@ -261,43 +228,24 @@ const gargantuaFragmentShader = `
                 float hitR = length(hit);
                 
                 float iscoRadius = rs * 3.0; 
-                float outerRadius = rs * 8.0; 
+                float outerRadius = rs * 7.0; 
 
                 if(hitR > rs && hitR < outerRadius) {
-                    float gradient = 0.0;
+                    float gradient = hitR < iscoRadius ? smoothstep(rs, iscoRadius, hitR) * 0.15 : pow(1.0 - smoothstep(iscoRadius, outerRadius, hitR), 1.2);
                     
-                    if (hitR < iscoRadius) {
-                        gradient = smoothstep(rs, iscoRadius, hitR) * 0.15; 
-                    } 
-                    else {
-                        gradient = 1.0 - smoothstep(iscoRadius, outerRadius, hitR);
-                        gradient = pow(gradient, 1.2); 
-                    }
-                    
-                    gradient = max(0.0, gradient);
-
-                    float rings = sin(hitR * 2.0) * 0.5 + 0.5;
-                    rings *= sin(hitR * 0.8) * 0.5 + 0.5;
+                    float rings = sin(hitR * 2.5) * 0.5 + 0.5;
                     float gasDensity = 0.2 + 0.8 * rings; 
                     
-                    vec3 hotColor = vec3(1.2, 0.9, 0.6); 
-                    vec3 coolColor = vec3(0.8, 0.2, 0.0); 
-                    vec3 diskCol = mix(coolColor, hotColor, pow(gradient, 1.5)) * gasDensity;
+                    vec3 diskCol = mix(vec3(0.8, 0.2, 0.0), vec3(1.0, 0.8, 0.5), pow(gradient, 1.5)) * gasDensity;
                     
                     vec3 diskVel = normalize(vec3(-hit.z, 0.0, hit.x)); 
                     float doppler = dot(dir, diskVel) * gradient; 
                     
-                    float dopplerFactor = 1.0 + doppler * 3.0; 
-                    diskCol *= dopplerFactor;
+                    diskCol *= (1.0 + doppler * 3.0);
+                    if(doppler > 0.0) { diskCol.b += doppler * 0.8; diskCol.r -= doppler * 0.3; } 
+                    else { diskCol.r += abs(doppler) * 0.5; }
                     
-                    if(doppler > 0.0) {
-                        diskCol.b += doppler * 0.8;
-                        diskCol.r -= doppler * 0.3;
-                    } else {
-                        diskCol.r += abs(doppler) * 0.5;
-                    }
-                    
-                    float opacity = 0.9 * gradient;
+                    float opacity = 0.85 * gradient;
                     color += diskCol * (1.0 - alpha) * opacity;
                     alpha += opacity * (1.0 - alpha);
                 }
@@ -312,7 +260,6 @@ const gargantuaFragmentShader = `
         }
 
         if (alpha < 0.01) discard; 
-        
         gl_FragColor = vec4(color, alpha);
     }
 `;
@@ -327,19 +274,22 @@ const GalaxyVisualizer = () => {
 
     useEffect(() => {
         if (!containerRef.current) return;
+        let animationFrameId: number;
 
-        const WIDTH = 256; 
+        // ¡ATENCIÓN!: 1024 x 1024 = 1,048,576 Partículas simultáneas.
+        const WIDTH = 1024; 
         
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x000000); 
         
-        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100000);
-        camera.position.set(0, 70, 200);
+        const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 100000);
+        camera.position.set(0, 100, 250);
 
-        const renderer = new THREE.WebGLRenderer({ antialias: false });
+        const renderer = new THREE.WebGLRenderer({ antialias: false }); // Desactivado para max performance
         renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.setPixelRatio(window.devicePixelRatio);
-        renderer.toneMapping = THREE.ReinhardToneMapping; 
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Limitar a 2x
+        renderer.toneMapping = THREE.ACESFilmicToneMapping; // Mapeo de color cinematográfico
+        renderer.toneMappingExposure = 1.2;
         containerRef.current.appendChild(renderer.domElement);
 
         const controls = new OrbitControls(camera, renderer.domElement);
@@ -347,12 +297,13 @@ const GalaxyVisualizer = () => {
         controls.maxDistance = 20000; 
 
         const renderScene = new RenderPass(scene, camera);
-        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.8, 0.6, 0.15);
+        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.2);
         const composer = new EffectComposer(renderer);
         composer.addPass(renderScene);
         composer.addPass(bloomPass);
 
-        const gargantuaGeometry = new THREE.PlaneGeometry(100000, 100000);
+        // OPTIMIZACIÓN: Un plano que solo abarca el área del agujero negro para no matar la GPU
+        const gargantuaGeometry = new THREE.PlaneGeometry(800, 800);
         const gargantuaMaterial = new THREE.ShaderMaterial({
             vertexShader: gargantuaVertexShader,
             fragmentShader: gargantuaFragmentShader,
@@ -374,22 +325,21 @@ const GalaxyVisualizer = () => {
         const velArray = dtVelocity.image.data as Float32Array;
 
         const generateInitialState = (type1: string, type2: string, mode: string) => {
-            
             if (mode === 'blackhole') {
                 gargantuaMesh.visible = true;
                 bh1.pos.set(0, 0, 0); bh1.vel.set(0, 0, 0); bh1.mass = 6000;
                 bh2.mass = 0; 
 
                 for (let i = 0; i < posArray.length; i += 4) {
-                    let r = Math.random() * 200 + 40; 
+                    let r = Math.random() * 250 + 25; // Disco más denso y amplio
                     let theta = Math.random() * Math.PI * 2;
                     let x = Math.cos(theta) * r;
-                    let y = (Math.random() - 0.5) * (r * 0.1); 
+                    let y = (Math.random() - 0.5) * (r * 0.05); // Disco muy plano
                     let z = Math.sin(theta) * r;
 
                     const vMag = Math.sqrt((0.5 * bh1.mass) / r);
                     let vx = Math.sin(theta) * vMag;
-                    let vy = (Math.random() - 0.5) * 0.5;
+                    let vy = (Math.random() - 0.5) * 0.1;
                     let vz = -Math.cos(theta) * vMag;
 
                     posArray[i] = x; posArray[i+1] = y; posArray[i+2] = z; posArray[i+3] = 1;
@@ -397,7 +347,6 @@ const GalaxyVisualizer = () => {
                 }
             } else {
                 gargantuaMesh.visible = false;
-                
                 bh1.pos.set(-80, 0, -20); bh1.vel.set(2.0, 0, 0.5); bh1.mass = 1200;
                 bh2.pos.set(80, 0, 20);   bh2.vel.set(-2.0, 0, -0.5); bh2.mass = type2 === 'dwarf' ? 300 : 1200;
 
@@ -438,7 +387,6 @@ const GalaxyVisualizer = () => {
                         velArray[i+3] = 1;
                     }
                 };
-
                 fillGalaxy(0, bh1, type1);
                 fillGalaxy(posArray.length / 2, bh2, type2);
             }
@@ -495,8 +443,9 @@ const GalaxyVisualizer = () => {
         const points = new THREE.Points(geometry, material);
         scene.add(points);
 
+        const getSafeElement = (id: string) => document.getElementById(id);
         const bindControl = (id: string, event: string, handler: (e: any) => void) => {
-            const el = document.getElementById(id);
+            const el = getSafeElement(id);
             if (el) el.addEventListener(event, handler);
             return () => { if (el) el.removeEventListener(event, handler); };
         };
@@ -513,26 +462,33 @@ const GalaxyVisualizer = () => {
             }),
             bindControl('gravitySlider', 'input', (e) => {
                 currentG = parseFloat(e.target.value);
-                document.getElementById('gravityValueDisplay')!.innerText = currentG.toFixed(2);
+                const disp = getSafeElement('gravityValueDisplay');
+                if (disp) disp.innerText = currentG.toFixed(2);
                 velVar.material.uniforms.gravity.value = currentG;
             }),
             bindControl('timeSlider', 'input', (e) => {
                 currentDt = parseFloat(e.target.value);
-                document.getElementById('timeValueDisplay')!.innerText = currentDt.toFixed(3);
+                const disp = getSafeElement('timeValueDisplay');
+                if (disp) disp.innerText = currentDt.toFixed(3);
                 posVar.material.uniforms.dt.value = currentDt;
                 velVar.material.uniforms.dt.value = currentDt;
             }),
             bindControl('dopplerToggle', 'change', (e) => {
                 material.uniforms.useDoppler.value = e.target.checked ? 1.0 : 0.0;
             }),
-            bindControl('simMode', 'change', () => document.getElementById('resetButton')?.click()),
+            bindControl('simMode', 'change', () => getSafeElement('resetButton')?.click()),
             bindControl('resetButton', 'click', () => {
-                currentMode = (document.getElementById('simMode') as HTMLSelectElement).value;
-                const t1 = (document.getElementById('typeGal1') as HTMLSelectElement).value;
-                const t2 = (document.getElementById('typeGal2') as HTMLSelectElement).value;
+                const modeEl = getSafeElement('simMode') as HTMLSelectElement;
+                const t1El = getSafeElement('typeGal1') as HTMLSelectElement;
+                const t2El = getSafeElement('typeGal2') as HTMLSelectElement;
                 
-                velVar.material.uniforms.isBlackHoleMode.value = currentMode === 'blackhole' ? 1.0 : 0.0;
-                material.uniforms.isBlackHoleMode.value = currentMode === 'blackhole' ? 1.0 : 0.0;
+                currentMode = modeEl ? modeEl.value : 'galaxy';
+                const t1 = t1El ? t1El.value : 'spiral';
+                const t2 = t2El ? t2El.value : 'spiral';
+                
+                const isBH = currentMode === 'blackhole' ? 1.0 : 0.0;
+                velVar.material.uniforms.isBlackHoleMode.value = isBH;
+                material.uniforms.isBlackHoleMode.value = isBH;
                 
                 generateInitialState(t1, t2, currentMode);
                 
@@ -554,11 +510,12 @@ const GalaxyVisualizer = () => {
         let lastTime = performance.now();
 
         const animate = () => {
-            requestAnimationFrame(animate);
+            animationFrameId = requestAnimationFrame(animate);
             controls.update();
             material.uniforms.cameraPos.value.copy(camera.position);
 
             if (gargantuaMesh.visible) {
+                // El raymarcher siempre mira a la cámara
                 gargantuaMesh.lookAt(camera.position);
             }
 
@@ -589,66 +546,52 @@ const GalaxyVisualizer = () => {
 
             composer.render();
 
-            // --- PROCESADOR ASÍNCRONO DE TELEMETRÍA COMPUTACIONAL ---
+            // --- TELEMETRÍA (1 MILLÓN DE PARTÍCULAS) ---
             frameCount++;
             const now = performance.now();
             if (now - lastTime >= 1000) { 
                 const fps = frameCount;
-                const hudFps = document.getElementById('hud-fps');
+                const hudFps = getSafeElement('hud-fps');
                 if (hudFps) {
                     hudFps.innerText = `${fps} FPS`;
                     hudFps.style.color = fps >= 55 ? '#34d399' : (fps >= 30 ? '#facc15' : '#ef4444');
                 }
 
+                const elEntities = getSafeElement('hud-entities');
+                if (elEntities) elEntities.innerText = (WIDTH * WIDTH).toLocaleString(); // 1,048,576
+
                 let gflops = 0;
-                const particlesFlops = 65536 * 40 * fps; 
+                // Ajustado para 1,048,576 partículas
+                const particlesFlops = (WIDTH * WIDTH) * 40 * fps; 
                 
                 if (currentMode === 'blackhole') {
-                    const raymarchingFlops = window.innerWidth * window.innerHeight * 150 * 50 * fps;
+                    // El raymarching está optimizado por la escala del mesh
+                    const raymarchingFlops = window.innerWidth * window.innerHeight * 100 * 50 * fps;
                     gflops = (particlesFlops + raymarchingFlops) / 1e9;
                     
-                    const elRaySteps = document.getElementById('hud-ray-steps');
-                    if(elRaySteps) elRaySteps.innerText = 'Activada (Volumétrica)';
+                    const safeSet = (id: string, val: string) => { const el = getSafeElement(id); if(el) el.innerText = val; };
                     
-                    const rs = 12.0; 
+                    safeSet('hud-ray-steps', 'Activada (Lente Grav.)');
+                    safeSet('hud-mass', '6.0 x 10^6 M☉');
+                    safeSet('hud-rs', '12.0 u');
+                    safeSet('hud-photon', '18.0 u');
+                    safeSet('hud-isco', '36.0 u');
                     
-                    const elMass = document.getElementById('hud-mass');
-                    if(elMass) elMass.innerText = '6.0 x 10^6 M☉';
-                    
-                    const elRs = document.getElementById('hud-rs');
-                    if(elRs) elRs.innerText = `${rs.toFixed(1)} u`;
-                    
-                    const elPhoton = document.getElementById('hud-photon');
-                    if(elPhoton) elPhoton.innerText = `${(rs * 1.5).toFixed(1)} u`;
-                    
-                    const elIsco = document.getElementById('hud-isco');
-                    if(elIsco) elIsco.innerText = `${(rs * 3.0).toFixed(1)} u`;
-                    
-                    const dilation = Math.sqrt(1 - (rs / (rs * 3.0)));
-                    const elDilation = document.getElementById('hud-dilation');
-                    if(elDilation) elDilation.innerText = `${dilation.toFixed(4)}x`;
+                    const dilation = Math.sqrt(1 - (12.0 / 36.0));
+                    safeSet('hud-dilation', `${dilation.toFixed(4)}x`);
                 } else {
                     gflops = particlesFlops / 1e9;
-                    const elRaySteps = document.getElementById('hud-ray-steps');
-                    if(elRaySteps) elRaySteps.innerText = 'Inactiva (Mec. Clásica)';
+                    const safeSet = (id: string, val: string) => { const el = getSafeElement(id); if(el) el.innerText = val; };
                     
-                    const elMass = document.getElementById('hud-mass');
-                    if(elMass) elMass.innerText = 'Sistema Binario';
-                    
-                    const elRs = document.getElementById('hud-rs');
-                    if(elRs) elRs.innerText = 'N/A';
-                    
-                    const elPhoton = document.getElementById('hud-photon');
-                    if(elPhoton) elPhoton.innerText = 'N/A';
-                    
-                    const elIsco = document.getElementById('hud-isco');
-                    if(elIsco) elIsco.innerText = 'N/A';
-                    
-                    const elDilation = document.getElementById('hud-dilation');
-                    if(elDilation) elDilation.innerText = '1.0000x (Newtoniana)';
+                    safeSet('hud-ray-steps', 'Inactiva');
+                    safeSet('hud-mass', 'Sistema Binario');
+                    safeSet('hud-rs', 'N/A');
+                    safeSet('hud-photon', 'N/A');
+                    safeSet('hud-isco', 'N/A');
+                    safeSet('hud-dilation', '1.0000x');
                 }
                 
-                const elFlops = document.getElementById('hud-flops');
+                const elFlops = getSafeElement('hud-flops');
                 if(elFlops) elFlops.innerText = `${gflops.toFixed(2)} GFLOPs`;
                 
                 frameCount = 0;
@@ -666,9 +609,13 @@ const GalaxyVisualizer = () => {
         window.addEventListener('resize', handleResize);
 
         return () => {
+            cancelAnimationFrame(animationFrameId);
             window.removeEventListener('resize', handleResize);
             cleanups.forEach(c => c());
             renderer.dispose();
+            if (containerRef.current && renderer.domElement) {
+                containerRef.current.removeChild(renderer.domElement);
+            }
         };
     }, []);
 
